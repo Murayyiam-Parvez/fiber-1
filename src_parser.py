@@ -2,6 +2,7 @@
 
 import sys
 import re
+import subprocess
 from pygments.lexers import get_lexer_by_name
 from pygments.token import Token
 #from pycparser import c_parser
@@ -127,7 +128,7 @@ def _parse_patch_at(p_buf,st,ed,s_buf):
         t0 = c_index[i-1][1] + 1
         t3 = c_index[i+1][0] - 1
         #Get the line number of the change-sites in kernel source.
-        (c_inf,prev_line) = _locate_change_site(head,p_buf[t1:t2+1],p_buf[t0:t1],p_buf[t2+1:t3+1],s_buf,st_line=prev_line) 
+        (c_inf,prev_line) = _locate_change_site(head,p_buf[t1:t2+1],p_buf[t0:t1],p_buf[t2+1:t3+1],s_buf,st_line=prev_line)
         if c_inf is None:
             if dbg_out:
                 print '>>>>No matches found for this @@'
@@ -142,7 +143,7 @@ def _parse_patch_at(p_buf,st,ed,s_buf):
         func_name = get_func_name(lno)
         if not func_name:
             if dbg_out:
-                print 'Line %d does not belong to any function.' % (lno + LINE_BASE)
+                print 'Line %d does not belong to any function.' % (lno)
         else:
             #(name,head_line)
             inf.append((func_name[0],func_name[1],c_inf))
@@ -162,14 +163,15 @@ def _locate_change_site(head,clines,blines,alines,s_buf,st_line=0):
         for l in alines:
             print l
         print '----------------@@--------------------'
-    #locate head
+    #locate head sometimes there are several same changesite and context,so we need to use head to locate
     if head.strip():
         for i in range(len(s_buf)):
             if head.strip() == s_buf[i].strip():
                 break
         else:
             #No head found
-            return (None,st_line)
+            i = st_line
+            #return (None,st_line)
         if i < st_line:
             i = st_line
     else:
@@ -209,11 +211,11 @@ def _locate_change_site(head,clines,blines,alines,s_buf,st_line=0):
                 if _cmp(alines,i):
                     #Call it a day.
                     if ty == 'aft':
-                        inf['add'] = {(i-len(plines),i-1):plines}
-                        inf['del'] = {(j+len(blines),j+len(blines)+len(nlines)-1):nlines}
+                        inf['add'] = {(i-len(plines)+LINE_BASE,i-1+LINE_BASE):plines}
+                        inf['del'] = {(j+len(blines)+LINE_BASE,j+len(blines)+len(nlines)-1+LINE_BASE):nlines}
                     else:
-                        inf['del'] = {(i-len(nlines),i-1):nlines}
-                        inf['add'] = {(j+len(blines),j+len(blines)+len(plines)-1):plines}
+                        inf['del'] = {(i-len(nlines)+LINE_BASE,i-1+LINE_BASE):nlines}
+                        inf['add'] = {(j+len(blines)+LINE_BASE,j+len(blines)+len(plines)-1+LINE_BASE):plines}
                     inf['type'] = ty
                     return (inf,i)
                 else:
@@ -229,9 +231,9 @@ def _locate_change_site(head,clines,blines,alines,s_buf,st_line=0):
                 if _cmp(alines,i):
                     #Got it.
                     if ty == 'aft':
-                        inf['add'] = {(i-len(plines),i-1):plines}
+                        inf['add'] = {(i-len(plines+LINE_BASE),i-1+LINE_BASE):plines}
                     else:
-                        inf['add'] = {(j+len(blines),j+len(blines)+len(plines)-1):plines}
+                        inf['add'] = {(j+len(blines)+LINE_BASE,j+len(blines)+len(plines)-1+LINE_BASE):plines}
                     inf['type'] = ty
                     return (inf,i)
                 else:
@@ -246,9 +248,9 @@ def _locate_change_site(head,clines,blines,alines,s_buf,st_line=0):
                     ty = 'aft'
                 if _cmp(alines,i):
                     if ty == 'aft':
-                        inf['del'] = {(j+len(blines),j+len(blines)+len(nlines)-1):nlines}
+                        inf['del'] = {(j+len(blines)+LINE_BASE,j+len(blines)+len(nlines)-1+LINE_BASE):nlines}
                     else:
-                        inf['del'] = {(i-len(nlines),i-1):nlines}
+                        inf['del'] = {(i-len(nlines)+LINE_BASE,i-1+LINE_BASE):nlines}
                     inf['type'] = ty
                     return (inf,i)
                 else:
@@ -309,10 +311,21 @@ def build_func_map(s_buf):
                     func_head = _detect_func_head(s_buf,prev_pos)
                     if func_head:
                         (func,arg_cnt) = func_head
-                        cur_func_inf[(prev_pos[0],i)] = func_head
-                        #NOTE: Sometimes one file can have multiple functions with same name, due to #if...#else.
-                        #So to mark a function we need both name and its location.
-                        cur_func_inf_r[(func,prev_pos[0])] = ((prev_pos[0],i),arg_cnt)
+                        #update: head contains multiple lines
+                        if func_head[0]+'(' not in s_buf[prev_pos[0]-LINE_BASE]:
+                            startline=prev_pos[0]-1
+                            funcname=func_head[0]
+                            while True:
+                                if funcname+'(' in s_buf[startline-1]:
+                                    break
+                                startline -=1
+                            cur_func_inf[(startline,i+LINE_BASE)] = func_head
+                            cur_func_inf_r[(func,startline)] = ((startline,i+LINE_BASE),arg_cnt)
+                        else:
+                            cur_func_inf[(prev_pos[0],i+LINE_BASE)] = func_head
+                            #NOTE: Sometimes one file can have multiple functions with same name, due to #if...#else.
+                            #So to mark a function we need both name and its location.
+                            cur_func_inf_r[(func,prev_pos[0])] = ((prev_pos[0],i+LINE_BASE),arg_cnt)
                 elif cnt < 0:
                     print '!!! Syntax error: ' + s_buf[i]
                     print 'prev_pos: %d:%d' % adj_lno_tuple(prev_pos)

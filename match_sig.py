@@ -20,7 +20,13 @@ from sym_tracer import Sym_Tracer
 from sym_table import Sym_Table
 from sym_executor import Sym_Executor
 
+import subprocess
 default_options = {}
+
+def command(string1):
+    p=subprocess.Popen(string1, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    result=p.stdout.readlines()
+    return result
 
 #We will use the DiGraph matcher provided in networkx package to do the subgraph match.
 #This matcher class can also do some semantic comparison for nodes and edges besides syntactic checks.
@@ -112,11 +118,15 @@ def graph_match(sig,proj,cfg,sym_tab=None):
     #Do the subgraph match, node_matcher() is a simple node-level semantic matcher.
     digm = isomorphism.DiGraphMatcher(cfg,sig,node_match=node_matcher)
     candidates = []
+    doneaddrs=set()
     for it in digm.subgraph_isomorphisms_iter():
         #Each iter here is a possible match (i.e. a candidate)
         #At first wrap it into a sig structure.
         addrs = [x.addr for x in it.keys()]
+        if str(addrs) in doneaddrs:
+            continue
         print '[TOPO MATCH] ' + hex_array_sorted(addrs)
+        doneaddrs.add(str(addrs))
         #We guarantee in extraction phase that every signature is connected, so here the candidate signature must also be connected, thus we
         #can directly use init_signature(...)[0].
         c_sig = init_signature(proj,cfg,addrs,sym_tab=sym_tab)[0]
@@ -484,7 +494,7 @@ def semantic_match(mapping,cand,sig,options):
 #cfg --> cfg of target function to be matched, a DiGraph
 #cfg_bounds --> the start and end of the cfg area
 #cfg_acc --> Angr's accurate cfg
-def do_match_sig(sig,proj,cfg,cfg_bounds,cfg_acc,sym_tab,options):
+def do_match_sig(sig,proj,cfg,cfg_bounds,cfg_acc,sym_tab,options,imagepath):
     #First do a subgraph match that is mainly based on the graph syntactics.
     candidates = graph_match(sig,proj,cfg,sym_tab=sym_tab)
     if not candidates:
@@ -493,13 +503,13 @@ def do_match_sig(sig,proj,cfg,cfg_bounds,cfg_acc,sym_tab,options):
     candidate_sigs = [x for (x,y) in candidates]
     #Now basically we need to do the symbolic execution from function entry to each of the candidates and
     #collect semantic formulas along the process.
-    exe = Sym_Executor(dbg_out=True,options=options)
+    exe = Sym_Executor(dbg_out=False,options=options)
     targets = get_cfg_bound(candidate_sigs)
     smg = exe.try_sym_exec(proj=proj,cfg=cfg_acc,cfg_bounds=cfg_bounds,targets=targets,start=cfg_bounds[0],new_tracer=True,new_recorder=True,sigs=candidate_sigs,sym_tab=sym_tab)
     matched = 0
     for (cand,mapping) in candidates:
         simplify_signature(cand)
-        analyze_func_args_aarch64(sys.argv[1],BASE,cand,options)
+        analyze_func_args_aarch64(imagepath,BASE,cand,options)
         print '---------------Candidate-----------------'
         show_signature(cand)
         if semantic_match(mapping,cand,sig,options):
@@ -521,117 +531,185 @@ def test_func_existence(proj,func_cfg,sym_tab,target_func):
                 cnt += 1
     return cnt
 
+def get_matchlistpath(kernelpath):
+    matchlist=[]
+    sigslist=os.listdir(kernelpath+"/sigs")
+    for sig in sigslist:
+        matchlist+=[kernelpath+"/sigs/"+sig]
+    matchlistpath=kernelpath+"/matchlist"
+    with open(matchlistpath,"w") as f:
+        for sigpath in matchlist:
+            f.write(sigpath+"\n")
+    return matchlistpath
+
 ARCH = 'aarch64'
 BASE = 0xffffffc000080000;
+#sys.argv[1] --> path/to/reference directory: contains  match-list (a file stores a list of pickled signature), reference patched kernel, reference not patched kernel
+#sys.argv[2] --> match mode
+#sys.argv[3] --> path/to/targetkernel (image and symbol table)
+def match_sig(mode):
+    sigspath = sys.argv[1]
+    target_kernelpath = sys.argv[3]
+    #do the match with patched kernel and get cnt, time......
+    #mode0 match with reference patched kernel
+    if mode==0:
+        matchlistpath=get_matchlistpath(cve)
+        kernelpath = sigspath+'/patchkernel'
+    #mode1 match with target kernel
+    elif mode==1:
+        matchlistpath=sigspath+"/match_res_m1"
+        kernelpath = target_kernelpath
+    #mode2: match with unpatched kernel
+    elif mode==2:
+        matchlistpath=sigspath+"/matchlist"
+        kernelpath = sigspath+'/nopatchkernel'
+    else:
+        print 'invalid mode'
+        return
+    print 'matchlistpath:',matchlistpath
 
-#sys.argv[1] --> path/to/kernel-image (target image)
-#sys.argv[2] --> path/to/symbol-table (for target image)
-#sys.argv[3] --> path/to/match-list (a file stores a list of pickled signature)
-def match_sig():
     global default_options,BASE
-    symbol_table = Sym_Table(sys.argv[2])
+    imagepath=kernelpath+"/boot"
+    target_symboltablepath=kernelpath+"/System.map"
+    symbol_table = Sym_Table(target_symboltablepath)
     BASE = symbol_table.probe_arm64_kernel_base()
     code_segments = symbol_table.get_code_segments(BASE)
-    b = load_kernel_image(sys.argv[1],ARCH,BASE,segments=code_segments)
-    res_vec = []
-    res_dic = {}
-    miss_sigs = []
-    prev_cve = ''
-    td = 0
-    applicable = True
-    with open(sys.argv[3],'r') as f:
+    b = load_kernel_image(imagepath,ARCH,BASE,segments=code_segments)
+    sig_cntlist=[]
+    with open(matchlistpath,'r') as f:
         for line in f:
             line = line.strip()
+            print 'try with ',line
             if not line:
                 continue
             if line[0] == '#':
                 continue
             tks = line.split(' ')
             cve = tks[0][tks[0].rfind('/')+1:tks[0].rfind('-sig')]
-            applicable = True
-            if len(tks) > 1:
-                if cve in res_dic:
-                    continue
-                elif prev_cve and cve != prev_cve:
-                    if not prev_cve in res_dic:
-                        res_dic[prev_cve] = ('N',td)
-                    td = 0
-            try:
-                with open(tks[0],'rb') as fsig:
-                    sig = pickle.load(fsig)
-            except:
-                print 'No sig file: ' + tks[0]
-                miss_sigs += [tks[0]]
-                applicable = False
+            #match with patched kernel
+            result = match_sig2(tks,imagepath,symbol_table,b)
+            if not result:
                 continue
-            func_name = sig.graph['func_name']
-            sig_name = sig.graph['sig_name']
-            default_options = sig.graph['options']
-            entry = symbol_table.lookup_func_name(func_name)
-            if entry is None:
-                applicable = False
-                print 'Cannot locate the function %s for sig %s in specified kernel image symbol table' % (func_name,sig_name)
-                continue
-            t0 = time.time()
-            (ty,addr,size) = entry
-            cfg_acc = get_cfg_acc(b,addr,addr+size) 
-            func_cfg = get_func_cfg(cfg_acc,addr,proj=b,sym_tab=symbol_table,simplify=True)
-            if 'func_existence_test' in default_options:
-                #Do a pure function existence testing here, no need to do symbolic execution.
-                target_func = default_options['func_existence_test']
-                print 'Func Existence Test for sig: %s, func_name: %s, target_func: %s' % (sig_name,func_name,target_func)
-                cnt = test_func_existence(b,func_cfg,symbol_table,default_options['func_existence_test'])
-            else:
-                #Below is normal symbolic execution based matching.
-                retry_cnt = 1
-                while retry_cnt > 0:
-                    cnt = 0
-                    try:
-                        (collision,cnt) = do_match_sig(sig,b,func_cfg,[addr,addr+size],cfg_acc,symbol_table,default_options)
-                    except:
-                        traceback.print_exc()
-                        if cnt == 0:
-                            cnt = -1
-                        break
-                    if collision:
-                        print 'Addr collision when matching, retry...'
-                    else:
-                        break
-                    retry_cnt = retry_cnt - 1
-            t1 = time.time() - t0
-            if len(tks) > 1:
-                td = td + t1
-                prev_cve = cve
-                if cnt >= int(tks[1]):
-                    res_dic[cve] = ('P',td)
-                    td = 0
-                    continue
-            else:
-                res_vec += [(sig_name,cnt,t1)]
-                print '%s has %d matches, taking %.2f s' % res_vec[-1]
-    if len(tks) > 1:
-        if not cve in res_dic and applicable:
-            res_dic[cve] = ('N',td)
-        td = 0
-        print '----------------RESULTS----------------'
-        with open('match_res_%s_%.0f_m1' % (sys.argv[1][sys.argv[1].rfind('/')+1:],time.time()),'w') as f:
-            for k in sorted(list(res_dic)):
-                td = td + res_dic[k][1]
-                l = '%s %s %.2f' % (k,res_dic[k][0],res_dic[k][1])
-                print l
-                f.write(l+'\n')
-            f.write('Time: ' + str(td) + '\n')
-            print 'Time: ' + str(td)
-    else:
-        print '----------------RESULTS----------------'
-        with open('match_res_%s_%.0f_m0' % (sys.argv[1][sys.argv[1].rfind('/')+1:],time.time()),'w') as f:
-            for v in res_vec:
-                l = '%s %d %.2f' % v
-                print l
-                f.write(l+'\n')
-    print '----------------MISSED----------------'
-    for v in miss_sigs:
-        print v
+            (cnt,t1)=result
+            sig_cntlist += [(line,cnt,t1)]
+            if mode ==1:
+                targetcnt=int(line.split(' ')[-1])
+                if int(cnt) >= targetcnt:
+                    break
 
+    if mode==1:
+        print '----------------RESULTS----------------'
+        result=None
+        for (line,cnt,Time) in sig_cntlist:
+            print line,str(cnt),Time
+            if result == 'P':
+                continue
+            if cnt != None:
+                target=int(line.split(' ')[-1])
+                if int(cnt) >= target:
+                    result='P'
+                else:
+                    result='N'
+        return result
+    #mode==0,2
+    else:
+        sig_cntlist.sort(key=lambda tup: tup[2])
+        print '----------------RESULTS----------------'
+        if mode==0:
+            outputmatchlist = sigspath+'/match_res_m0A'
+        elif mode==2:
+            outputmatchlist = sigspath+'/match_res_m0B'
+        with open(outputmatchlist,'w') as f:
+            for (line,cnt,Time) in sig_cntlist:
+                Time=format(Time,'.2f')
+                print line+' '+str(cnt)+' '+str(Time)
+                f.write(line+' '+str(cnt)+' '+str(Time)+'\n')
+        #compare the results from unpatch/patch kernel, filter the useless signatures
+        if mode == '2':
+            string='tools/res_analyze.py '+sigspath+'/match_res_m0A '+sigspath+'/match_res_m0B '+sigspath+"/match_res_m1"
+            command(string)
+
+
+def match_sig2(tks,imagepath,symbol_table,b):
+    print 'match_sig2',tks
+    try:
+        with open(tks[0],'rb') as fsig:
+            sig = pickle.load(fsig)
+    except:
+        return None
+    func_name = sig.graph['func_name']
+    sig_name = sig.graph['sig_name']
+    print 'func_name ',func_name
+    if 'hosthostfunc' in sig.graph:
+        hosthostfunc=sig.graph['hosthostfunc']
+        hostfunc=hosthostfunc.split('--')[-1]
+    else:
+        hosthostfunc=None
+        hostfunc=func_name
+    default_options = sig.graph['options']
+    entrylist = symbol_table.lookup_func_name(hostfunc,2)
+    print hostfunc
+    if entrylist is None:
+        print 'try mode1'
+        entry=symbol_table.lookup_func_name(hostfunc,1)
+        if entry is None:
+            print 'Cannot locate the function %s for sig %s in specified kernel image symbol table' % (func_name,sig_name)
+            #sig_cntlist+=[(line, None,0)]
+            return None
+        else:
+            entrylist=[entry]
+    for entry in entrylist:
+        print 'function entry: '
+        print (entry[0],hex(entry[1]),hex(entry[2]))
+        (cnt,t1)=match_sig3(entry,b,symbol_table,default_options,sig,imagepath,sig_name,func_name)
+        if cnt >0:
+            break
+    return (cnt,t1)
+
+def match_sig3(entry,b,symbol_table,default_options,sig,imagepath,sig_name,func_name):
+    t0 =time.time()
+    (ty,addr,size) = entry
+    global cfgfast
+    cfg_acc = get_cfg_acc(b,addr,addr+size,cfgfast) 
+    func_cfg = get_func_cfg(cfg_acc,addr,proj=b,sym_tab=symbol_table,simplify=True)
+    if 'func_existence_test' in default_options:
+        #Do a pure function existence testing here, no need to do symbolic execution.
+        target_func = default_options['func_existence_test']
+        print 'Func Existence Test for sig: %s, func_name: %s, target_func: %s' % (sig_name,func_name,target_func)
+        cnt = test_func_existence(b,func_cfg,symbol_table,default_options['func_existence_test'])
+    else:
+        #Below is normal symbolic execution based matching.
+        retry_cnt = 2
+        while retry_cnt > 0:
+            cnt = 0
+            try:
+                (collision,cnt) = do_match_sig(sig,b,func_cfg,[addr,addr+size],cfg_acc,symbol_table,default_options,imagepath)
+            except:
+                traceback.print_exc()
+                if cnt == 0:
+                    cnt = -1
+                break
+            if collision:
+                print 'Addr collision when matching, retry...'
+            else:
+                break
+            retry_cnt = retry_cnt - 1
+
+    t1 = time.time() - t0
+    return (cnt,t1)
+ 
+
+#[sigpath] [mode] [target kernel path]
 if __name__ == '__main__':
-    match_sig()
+    global cfgfast=False
+    if 'cfgfast' in sys.argv:
+        cfgfast=True
+    t0=time.time()
+    if mode == 'all':
+        match_sig('0')
+        match_sig('2')
+        match_sig('1')
+    else:
+        match_sig(mode)
+    Time=str(time.time()-t0).split('.')[0]
+    print 'Time:',Time

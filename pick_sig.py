@@ -3,16 +3,80 @@
 #sys,argv[1]: path/to/patch_list
 #sys.argv[2]: path/to/kernel-source
 #sys.argv[3]: path/to/output_file
-#sys.argv[4:]: symbol tables for kernels (can provide multiple)
+#sys.argv[4:]: path to compiled reference kernel (including symbol table, debug info file)
 
 import sys
 from sym_table import Sym_Table
 from src_parser import *
 import time
+import re
+import ext_sig
+import os
+import pickle
+from multiprocessing import Pool
 
 #TODO List:
 #(1) Patches with '#if' '#else', e.g. CVE-2015-8839
 
+ADDR2LINE = '/home/zheng/fiberaarch64-linux-android-4.9/bin/aarch64-linux-android-addr2line'
+#if host function is inlined in target, we try to find the hostfunction of hostfunction instead. what hosthostfunction is most suitable?
+def find_hosthostfunc(funcname):
+    time0=time.time()
+    global kernelpath
+    #debug info file
+    tmp_o=kernelpath+"tmp_o"
+    symboltablepath=kernelpath+"System.map"
+    sym_table=Sym_Table(symboltablepath)
+    #print "sym_table ",time.time()-time0
+    found=False
+    hostfunc=""
+    hostfuncs=set()
+    trim = lambda x:x[:-1] if x[-1] == '\n' else x
+    with open(tmp_o,'r') as f:
+        for l in f:
+            l=trim(l)
+            if l.startswith('0x'):
+                found=False
+                if hostfunc:
+                    hostfuncs.add(hostfunc)
+                    hostfunc=""
+                tokens = l.split(':')
+                func = tokens[1].split(' ')[1]
+                if func==funcname:
+                    found=True
+            elif l.startswith(' (inlined'):
+                if found:
+                    tokens = l.split(':')
+                    func = tokens[0].split(' ')[3]
+                    if hostfunc:
+                        hostfunc=hostfunc+"--"+str(func)
+                    else:
+                        hostfunc=str(func)
+    #sometimes we can get multiple candidates of hosthost function
+    print "number of hostfuncs before filter: ",len(hostfuncs)
+    sym_tabs=[sym_table]
+    #filter using the symbol table
+    hostfuncslist=list(set([hostfunc for hostfunc in hostfuncs if hostfuncfilter(hostfunc,sym_tabs)]))
+    hostfuncslist.sort(key= lambda x: len(x.split('--')))
+    if len(hostfuncslist)==0:
+        print "no hostfuncs for ",funcname
+        return None
+    else:
+    #the count of return hosthostfucntion can be changed. 
+    #hostfunc--hosthostfunc--hosthosthostfunc
+        print 'number of candidates of hosthost function for ',funcname,' is ',len(hostfuncslist)
+        print hostfuncslist
+        print "the chosen host host function of for ",funcname," is ",hostfuncslist[0]
+        return hostfuncslist[0] 
+
+def hostfuncfilter(hostfunc,sym_tabs):
+    hostfuncname=hostfunc.split("--")[-1]
+    for sym_table in sym_tabs:
+        if not sym_table.lookup_func_name(hostfuncname):
+            if not sym_table.lookup_func_name(hostfuncname,1):
+                return False
+    return True
+    
 dbg_out = True
 #The goal of this function is to generate a list, each entry is line numbers in source kernel files that we can use to
 #extract a signature. This is generated according to the patch information and simply specify the changed lines as candidates.
@@ -72,19 +136,109 @@ def _get_tags_for_lines(l_range,f_inf):
         i += 1
     return tags
 
-#Some functions may exist in the symbol table, but in practice they may still be inlined based on the arguments.
-#(e.g. if the 'size' argument of memset is small enough.)
-ext_inline_list = ['memset','memcpy']
-def func_exists(n):
-    global sym_tabs
-    if n in ext_inline_list:
-        return False
-    if not sym_tabs:
+def func_exists_symbol(funcname):
+    global kernelpath
+    symboltablepath=PATH+"System.map"
+    sym_table=Sym_Table(symboltablepath)
+    if sym_table.lookup_func_name(funcname):
         return True
-    for s in sym_tabs:
-        if not s.lookup_func_name(n):
-            return False
-    return True
+    else:
+        return False
+
+#determine if inline by debug information
+#if inline, return True, if not inline ,return False
+def func_inline_vmlinux(funcname,hostfunc,kernelpath,lnos=None,hosthostfunc=None):
+    symboltable=kernelpath+"/System.map"
+    sym_table=Sym_Table(symboltable)
+    #function name in debug info maye be a little different from that in source code
+    global func_truefunc
+    if 'CALL' in hostfunc:
+        hostfunc=func_truefunc[hostfunc]
+    if funcname in func_truefunc:
+        funcname=func_truefunc[funcname]
+    if not sym_table.lookup_func_name(funcname,2):
+        print 'target function ',funcname,' not in symbol table ,we think it inlined '
+        return True
+    entry = sym_table.lookup_func_name(hostfunc)
+    if hosthostfunc:
+        hosthostfuncname=hosthostfunc.split("--")[-1]
+        entry = sym_table.lookup_func_name(hosthostfuncname,2)
+    if entry is None:
+        print "host function ",hostfunc," doesn't exist in symbol table ",kernelpath
+        return True
+    #simple entry
+    if type(entry)==tuple:
+        return func_inline_vmlinux2(entry,funcname,hostfunc,kernelpath,lnos,hosthostfunc)
+    #multiple entry
+    if type(entry)==list:
+        entrylist=entry
+        for entry in entrylist:
+            result=func_inline_vmlinux2(entry,funcname,hostfunc,kernelpath,lnos)
+            if result !=None:
+                return result
+        return False
+
+
+def func_inline_vmlinux2(entry,funcname,hostfunc,kernelpath,lnos):
+    (ty,func_addr,func_size) = entry
+    with open(kernelpath+'/tmp_o','r') as f:
+        f_buf=f.readlines()
+        st=None
+        for i in range(len(f_buf)):
+            line=f_buf[i]
+            if addr_ofline(line)==func_addr:
+                st=i
+            if st:
+                if addr_ofline(line)>=(func_addr+func_size):
+                    ed=i
+                    break
+    linelist=f_buf[st:ed+1]
+    found=False
+    inlined=False
+    for l in linelist:
+        if l.startswith('0x'):
+            tokens = l.split(':')
+            addr = int(tokens[0],16)
+            func = tokens[1].split(' ')[1]
+            if func==funcname:
+                found=True
+            else:
+                found=False
+        elif l.startswith(' (inlined'):
+            tokens = l.split(':')
+            lno = int(tokens[1].split(' ')[0])
+            func = tokens[0].split(' ')[3]
+            if func==funcname:
+                found=True
+        if found:
+            if l.startswith(' (inlined'):
+                tokens = l.split(':')
+                lno = int(tokens[1].split(' ')[0])
+                func = tokens[0].split(' ')[3]
+                if func == hostfunc:
+                    #inline
+                    inlined=True
+                    if lnos:
+                        if lno in lnos:
+                            print funcname," is inlined in ",hostfunc
+                            return True
+                    else:
+                        return True
+    #target function seems to be inlined, but the lnos not matched. It may because the target function is inlined in another place instead of the chosen line. 
+    if inlined:
+        return None
+    return False
+            
+#get the address of line in debug info file
+def addr_ofline(l):
+    trim = lambda x:x[:-1] if x[-1] == '\n' else x
+    if l.startswith('0x'):
+        l = trim(l)
+        tokens = l.split(':')
+        addr = int(tokens[0],16)
+        return addr
+    else:
+        return None
 
 fmt_func = ('pr_err','pr_dbg','pr_info','printk','snprintf','write_str')
 def _is_fmt_func(name):
@@ -143,6 +297,7 @@ def _is_fmt_str_patch(src,patch,call_inf):
 
 #Sometimes a patch will only change the arguments of a same callee, this function identifies the changed args,
 #returning something like (0,1,3) representing the order of changed args.
+#c_*: after patch o_&=*: before patch 
 def _get_changed_args(src,patch,call_inf):
     name = call_inf['name']
     rang = call_inf['range']
@@ -158,9 +313,11 @@ def _get_changed_args(src,patch,call_inf):
         for k in patch['del']:
             i = max(k[0],rang[0])
             j = min(k[1],rang[1])
+            #ignore the delete lines which are not overlapped with function call lines
             if i > j:
                 continue
             call_lines = list(o_call_lines)
+            #get the call lines before patch
             call_lines[i-rang[0]:j+1-rang[0]] = patch['del'][k][i-k[0]:j+1-k[0]]
             if j+1-rang[0] >= len(o_call_lines) and len(patch['del'][k]) > j+1-k[0]:
                 #This suggests the deleted lines are more than added lines.
@@ -207,16 +364,29 @@ def get_aft_patch_func(src,patch):
         src_func = filter(lambda x:x <> '24K MAGIC',src_func)
     return src_func
 
+#updated, fixed some errors
 def get_bfr_patch_func(src,patch):
     (st,ed) = patch['func_range']
-    src_func = src[st:ed+1]
+    #src_func = src[st-1:ed]
+    src_func = src[st:ed+1] 
     if patch['type'] == 'aft':
         #The src is aft-patch version, we should add the 'deleted' lines and remove 'added' lines.
         if 'add' in patch:
             for k in patch['add']:
-                src_func[k[0]-st:k[1]+1-st] = ['24K MAGIC'] * (k[1] - k[0] + 1)
+                if k[0]<st:
+                    start=0
+                else:
+                    start=k[0]-st
+                if k[1]>ed:
+                    end=ed+1-st
+                else:
+                    end=k[1]+1-st
+                src_func[start:end] = ['24K MAGIC'] * (end-start)
         if 'del' in patch:
-            for k in patch['del']:
+            dellist=[k for k in patch['del']]
+            #add the lines from the end to the begining. Note that k[0] corresponds the location in after patch functions. 
+            dellist.sort(key=lambda x:x[0],reverse=True)
+            for k in dellist:
                 src_func = src_func[0:k[0]-st] + patch['del'][k] + src_func[k[0]-st:]
         #Delete previously marked added lines.
         src_func = filter(lambda x:x <> '24K MAGIC',src_func)
@@ -278,13 +448,19 @@ def add_extra_options(cands,call_inf):
 
 #We are faced with (maybe) multiple src lines, but in many cases we don't need (and shouldn't) include all of them
 #into the signature. We should pick up those most unique (and simple, which means not related to too many BBs) lines. 
-def trim_line_candidates(cand,patch):
+def trim_line_candidates(cand,patch,cnt=20):
     #Currently, this function is mainly about my own experience in line selection.
     #That's to say, I will encode my experiences into some heuristics here as guidelines, so we cannot guarantee
     #the 100% success rate. If no experience exists for a certain candidate, we will simply use the original cand lines
     #if they are unique.
     c_file = cand['file']
     c_func = cand['func']
+    
+    if 'hosthostfunc' in cand:
+        hosthostfunc=cand['hosthostfunc']
+    else:
+        hosthostfunc=None
+    global kernelpath
     fi = func_inf[(c_file,c_func,cand['func_range'][0])]
     tags = _get_tags_for_lines(cand['line'],fi)
     res_cand = []
@@ -299,7 +475,10 @@ def trim_line_candidates(cand,patch):
         name = inf['name']
         args = inf['args']
         rang = inf['range']
-        inlined = not func_exists(name)
+        lnos=set([])
+        for ele in rang:
+            lnos.add((ele+1))
+        inlined = func_inline_vmlinux(name,c_func,kernelpath,lnos,hosthostfunc)
         fmt_str_patch = _is_fmt_str_patch(src_map[c_file],patch,inf)
         changed_args = _get_changed_args(src_map[c_file],patch,inf)
         func_name_unique = test_uniqueness(src_map[c_file],name+'(',patch,strip=True) 
@@ -320,7 +499,7 @@ def trim_line_candidates(cand,patch):
                 c['type'] = 'fmt_str' if not inlined else 'fmt_str_inline'
                 res_cand.append(c)
             else:
-                cs = add_context_no_guarantee(src_map[c_file],rang,patch,fi)
+                cs = add_context_no_guarantee(src_map[c_file],rang,patch,fi,c_func,hosthostfunc)
                 for c in cs:
                     c['file'] = c_file
                     c['func'] = c_func
@@ -355,7 +534,7 @@ def trim_line_candidates(cand,patch):
             #Besides, some arguments have been explicitly changed by the patch. 
             #Although the call-site passed uniqueness test, we still try to add some contexts for:
             #(1) performance opt (2) in case our string comparison based uniqueness test is not correct.
-            cs = add_context_no_guarantee(src_map[c_file],rang,patch,fi)
+            cs = add_context_no_guarantee(src_map[c_file],rang,patch,fi,c_func,hosthostfunc)
             if not inlined:
                 #Make a candidate based on the changed callee arguments.
                 c = {'file':c_file,'func':c_func}
@@ -404,7 +583,7 @@ def trim_line_candidates(cand,patch):
                 c['type'] = 'func_inline' if inlined else 'func'
                 res_cand.append(c)
             #Add contexts to make the candidate unique.
-            cs = add_context_no_guarantee(src_map[c_file],rang,patch,fi)
+            cs = add_context_no_guarantee(src_map[c_file],rang,patch,fi,c_func,hosthostfunc)
             for c in cs:
                 c['file'] = c_file
                 c['func'] = c_func
@@ -441,7 +620,7 @@ def trim_line_candidates(cand,patch):
             #by current string comparison based uniqueness test.
             #(2)Proper context can help to reduce match time, a simple cond statement usually leads to many candidates when matching.
             #So, the idea here is, if we find there are "good" contexts (e.g. non-inline function call), we will include it.
-            cs = add_context_no_guarantee(src_map[c_file],rang,patch,fi)
+            cs = add_context_no_guarantee(src_map[c_file],rang,patch,fi,c_func,hosthostfunc)
             for c in cs:
                 if True:
                 #if c['cont_type'] in ('func_aft','func_bfr'):
@@ -457,7 +636,7 @@ def trim_line_candidates(cand,patch):
             c['type'] = 'cond'
             res_cand.append(c)
         else:
-            cs = add_context_no_guarantee(src_map[c_file],rang,patch,fi)
+            cs = add_context_no_guarantee(src_map[c_file],rang,patch,fi,c_func,hosthostfunc)
             for c in cs:
                 c['file'] = c_file
                 c['func'] = c_func
@@ -469,8 +648,8 @@ def trim_line_candidates(cand,patch):
     func_lno = map(lambda x:x[0],line_func)
     line_unk = [(k,tags[k]) for k in tags if not k in cond_lno + func_lno]
     line_unk = sorted(line_unk,key=lambda x:x[0])
-    #Only consider unk lines when we have no other choices.
-    if not res_cand:
+    #Only consider unk lines when the number of choices is less than default cnt.
+    if len(res_cand) < cnt:
         i = 0
         while i < len(line_unk):
             l_no = line_unk[i][0]
@@ -493,7 +672,7 @@ def trim_line_candidates(cand,patch):
             #Uniqueness test.
             if test_uniqueness(src_map[c_file],''.join(src_map[c_file][l_no:l_no_ed+1]),patch,strip=True):
                 #Similar as H2.
-                cs = add_context_no_guarantee(src_map[c_file],(l_no,l_no_ed),patch,fi)
+                cs = add_context_no_guarantee(src_map[c_file],(l_no,l_no_ed),patch,fi,c_func,hosthostfunc)
                 for c in cs:
                     if True:
                     #if c['cont_type'] in ('func_aft','func_bfr'):
@@ -511,7 +690,7 @@ def trim_line_candidates(cand,patch):
                 c['opts'] = {'trim_tail_abs_jmp':'False'}
                 res_cand.append(c)
             else:
-                cs = add_context_no_guarantee(src_map[c_file],(l_no,l_no_ed),patch,fi)
+                cs = add_context_no_guarantee(src_map[c_file],(l_no,l_no_ed),patch,fi,c_func,hosthostfunc)
                 for c in cs:
                     c['file'] = c_file
                     c['func'] = c_func
@@ -538,7 +717,7 @@ def _get_main_type(tags):
 
 #We try to add some contexts by heuristic, but the uniqueness of the result cand lines is not guaranteed. 
 #We assume that the main body is of one type.
-def add_context_no_guarantee(src,lines,patch,f_inf):
+def add_context_no_guarantee(src,lines,patch,f_inf,c_func,hosthostfunc=None):
     (func_st,func_ed) = patch['func_range']
     tags = _get_tags_for_lines(patch['func_range'],f_inf)
     body_tags = set()
@@ -549,6 +728,7 @@ def add_context_no_guarantee(src,lines,patch,f_inf):
     last = lines[-1]
     c_cands_aft = []
     MAX_UNK_CNT = 2
+    hostfunc=c_func
     #First search downward to find statements of interest (func call and cond evaluation)
     #When searching downward, we should consider not only continuous lines but also non-continuous ones (e.g. x and y in if(x){.....}y). 
     st_l = set([last+1])
@@ -641,17 +821,23 @@ def add_context_no_guarantee(src,lines,patch,f_inf):
     res_c = []
     c_cands_aft_func = filter(lambda x:_get_main_type(tags[x[0]])=='func',c_cands_aft)
     c_cands_bfr_func = filter(lambda x:_get_main_type(tags[x[0]])=='func',c_cands_bfr)
-    def _pick_cont_func(cands,reverse=False):
+    def _pick_cont_func(cands,hosthostfunc,reverse=False):
         inlined = True
         cands = sorted(cands,key=lambda x:x[0],reverse=reverse)
         for c_func in cands:
             fi = tags[c_func[0]]['func'][0]
-            if func_exists(fi['name']):
+            rang=fi['range']
+            lnos=set([])
+            for ele in rang:
+                lnos.add(ele+1)
+
+            global kernelpath
+            if not func_inline_vmlinux(fi['name'],hostfunc,kernelpath,lnos,hosthostfunc):
                 yield (c_func,False)
             else:
                 yield (c_func,True)
     if c_cands_aft_func:
-        for (c_func,inlined) in _pick_cont_func(c_cands_aft_func):
+        for (c_func,inlined) in _pick_cont_func(c_cands_aft_func,hosthostfunc):
             c = {}
             c['line'] = combine_line_range(lines,c_func)
             if inlined:
@@ -669,7 +855,7 @@ def add_context_no_guarantee(src,lines,patch,f_inf):
                 c['cont_type'] = 'func_aft'
                 res_c += [c]
     if c_cands_bfr_func:
-        for (c_func,inlined) in _pick_cont_func(c_cands_bfr_func,reverse=True):
+        for (c_func,inlined) in _pick_cont_func(c_cands_bfr_func,hosthostfunc,reverse=True):
             c = {}
             c['line'] = combine_line_range(lines,c_func)
             if inlined:
@@ -756,11 +942,11 @@ def deduplicate_cands(cands):
 
 #NOTE: 'line candidates' refer to actual, existing source code lines present in kernel source tree specified in sys.argv[2]. 
 #So these candidate lines can be pre-patch or aft-patch version.
-def refine_line_candidates(cands,p_inf):
+def refine_line_candidates(cands,p_inf,cnt=8):
     res_cand = []
     for c in cands:
         patch = p_inf[(c['file'],c['func'],c['func_range'][0])]
-        trm_cands = trim_line_candidates(c,patch)
+        trm_cands = trim_line_candidates(c,patch,cnt)
         for tc in trm_cands:
             tc['file'] = c['file']
             tc['func'] = c['func']
@@ -859,18 +1045,46 @@ def rank_candidate(cands,p_inf):
     s = sorted(s,key=_calc_cand_score_func_len)
     s = sorted(s,key=_calc_cand_score_type,reverse=True)
     return s
-
+func_truefuncdic={
+        'memcpy':'__pi_memcpy',
+        'move_pages':'SYSC_move_pages',
+        'perf_event_open':'SYSC_perf_event_open',
+        'set_mempolicy':'C_SYSC_set_mempolicy',
+        'mbind':'C_SYSC_mbind',
+        }
+def get_truefuncname(cand):
+    global sourcekernelpath
+    filename=cand['file']
+    with open(sourcekernelpath+'/'+filename,'r') as f:
+        f_buf=f.readlines()
+    (st,ed)=cand['func_range']
+    funcdefineline=f_buf[st]
+    truefuncname=funcdefineline.split('(')[1].split(',')[0]
+    global func_truefuncdic
+    if truefuncname in func_truefuncdic:
+        truefuncname = func_truefuncdic[truefuncname]
+    func_truefunc[cand['func']]=truefuncname
+    return truefuncname
 func_inf = {}
-def do_pick_sig(patch_inf,pick_cnt=3):
+def do_pick_sig(patch_inf,pick_cnt=8):
+    hosthostfuncdic={}
+    global kernelpath
     #It's time to decide the source code lines that we can mark to extract signatures.
     cands = generate_line_candidates(patch_inf)
     if not cands:
         print '****** Pure deletion patch or pre-patched.'
         return []
     #We must ensure that the cand functions do exist in src kernel binary, since the extraction is based on the binary.
-    if sym_tabs:
-        #cands = filter(lambda x:sym_tabs[0].lookup_func_name(x['func']) is not None,cands)
-        cands = filter(lambda x:func_exists(x['func']),cands)
+    for cand in cands:
+        funcname=cand['func']
+        if 'CALL' in funcname:
+            funcname=get_truefuncname(cand,kernelpath)
+        if not func_exists_symbol(funcname):
+            hosthostfunc=find_hosthostfunc(funcname)
+            if not hosthostfunc:
+                continue
+            cand['hosthostfunc']=hosthostfunc
+            hosthostfuncdic[funcname]=hosthostfunc
     if not cands:
         print '****** No function name in the symbol table.'
         return []
@@ -885,11 +1099,15 @@ def do_pick_sig(patch_inf,pick_cnt=3):
             print '%s %s %s' % (c['file'],c['func'],c['line'])
     #For each candidate change site, we need to do some adjustments, if it's not unique, contexts need to be added,
     #if it contains multiple lines, it may need to be trimmed.
-    res_cand = refine_line_candidates(cands,patch_inf)
+    res_cand = refine_line_candidates(cands,patch_inf,pick_cnt)
     #Pick up the most promising candidates.
     res_cand = rank_candidate(res_cand,patch_inf)
     for c in res_cand:
         c['arg_cnt'] = patch_inf[(c['file'],c['func'],c['func_range'][0])]['arg_cnt']
+        if c['func'] in func_truefunc:
+            c['func']=func_truefunc[c['func']]
+        if c['func'] in hosthostfuncdic:
+            c['hosthostfunc']=hosthostfuncdic[c['func']]
     if not res_cand:
         res_cand = []
     if dbg_out:
@@ -901,10 +1119,11 @@ def do_pick_sig(patch_inf,pick_cnt=3):
 
 sym_tabs = []
 def pick_sig():
-    #Load symbol tables if there are any.
     global sym_tabs
-    for f in sys.argv[4:]:
-        sym_tabs.append(Sym_Table(f,dbg_out=dbg_out))
+    global sourcekernelpath = sys.argv[2]
+    global kernelpath = sys.argv[4]
+    symboltable = kernelpath+'/System.map'
+    sym_tabs.append(Sym_Table(symboltable,dbg_out=dbg_out))
     #Deal with patches in patch_list one by one.
     exts = []
     fails = []
@@ -961,8 +1180,11 @@ def pick_sig():
             opts = c.get('opts',{})
             for o in opts:
                 s += ' ' + o + ':' + opts[o]
+            if 'hosthostfunc' in c:
+                s += '  hosthostfunc:' + c['hosthostfunc']
             #Write to the output file.
             f.write(s + '\n')
+    
     print 'Time: %.2f' % (time.time() - t0)
     if fails:
         with open(sys.argv[3]+'_fail','w') as f:
@@ -976,4 +1198,4 @@ def try_lex():
 
 if __name__ == '__main__':
     pick_sig()
-    #try_lex() 
+

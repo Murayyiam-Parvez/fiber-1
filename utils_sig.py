@@ -7,9 +7,35 @@ import copy,re
 import networkx
 from networkx.algorithms import approximation
 import itertools
-
 #logging.basicConfig(level=logging.DEBUG) # adjust to the wanted debug level
 dbg_out = True
+
+#get debug info lines of given function
+trim = lambda x:x[:-1] if x[-1] == '\n' else x
+def get_func_debuginfo(kernel,entry):
+    (ty,func_addr,func_size) = entry
+
+    tmp_opath=kernel+"/tmp_o"
+    with open(tmp_opath,"r") as f:
+        s_buf=f.readlines()
+    for i in range(len(s_buf)):
+        l=trim(s_buf[i])
+        addr=addr_ofline(l)
+        if addr==func_addr:
+            st=i
+        elif addr >= (func_addr+func_size):
+            ed=i
+            break
+    return [trim(l) for l in s_buf[st:ed+1]]
+
+def addr_ofline(l):
+    if l.startswith('0x'):
+        tokens = l.split(':')
+        addr = int(tokens[0],16)
+        return addr
+    else:
+        return None
+
 
 def test_loader(b,base):
     print b.loader.min_addr
@@ -145,8 +171,11 @@ def print_vex_blocks(proj,addrs,opt_level=0):
         for stmt_idx, stmt in enumerate(irsb.statements):
             print '[' + str(stmt_idx) + '] ' + str(stmt) + ' -- ' + stmt.tag + ' -- ' + type(stmt).__name__
 
-def get_cfg_acc(proj,start,end):
-    return proj.analyses.CFGAccurate(context_sensitivity_level=0,starts=[start],call_depth=0,normalize=True)
+def get_cfg_acc(proj,start,end,cfgfast=False):
+    if cfgfast:
+        return get_cfg_fast(proj,start,end)
+    else:
+        return proj.analyses.CFGAccurate(context_sensitivity_level=0,starts=[start],call_depth=0,normalize=True)
 
 #Get the CFGFast of the function starting from 'start' and ending at 'end'
 def get_cfg_fast(proj,start,end):
@@ -503,11 +532,11 @@ def _combine_subsigs(cfg,g0,g1):
     if p0.intersection(a1):
         t = p0.intersection(s1)
         gs = cluster_padding_nodes(cfg,t)
-        t = set([x.addr for x in gs[0].nodes()]) if len(gs) > 0 else set([])
+        t = set([x.addr for x in gs[0].nodes()]) if len(gs) >0 else set([])
     elif p1.intersection(a0):
         t = p1.intersection(s0)
         gs = cluster_padding_nodes(cfg,t)
-        t = set([x.addr for x in gs[0].nodes()]) if len(gs) > 0 else set([])
+        t = set([x.addr for x in gs[0].nodes()]) if len(gs) >0 else set([])
     else:
         #In this case, consider both common predecessor and successor, choose the smaller resulting signature.
         #(1)Predecessor
@@ -712,9 +741,11 @@ def show_signature(sig):
         print '[options]'
         print sig.graph['options']
     print '[Root Instructions]'
-    print [hex(x) for x in sig.graph.get('root_ins',[])]
+    print sorted([hex(x) for x in sig.graph.get('root_ins',[])])
     print '---------------------Node Information----------------------'
-    for node in sig.nodes():
+    nodelist=[node for node in sig.nodes()]
+    nodelist.sort(key=lambda x:x.addr)
+    for node in nodelist:
         print '>>>>>[%x,%x]<<<<<' % (node.addr,node.size)
         print 'succs: ' + str([hex(x.addr) for x in sig.successors(node)]) 
         print 'preds: ' + str([hex(x.addr) for x in sig.predecessors(node)]) 

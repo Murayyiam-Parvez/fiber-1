@@ -98,7 +98,7 @@ def analyze_res():
 #sys.argv[1]: match result against patched kernel
 #sys.argv[2]: match result against unpatched kernel
 #output: the match list that can be used to test target kernel images
-def analyze_sig_verify_res():
+def analyze_sig_verify_res_o():
     limit = 6
     (b_res,b_time,_) = get_match_inf(sys.argv[1],limit)
     (r_res,r_time,_) = get_match_inf(sys.argv[2],limit)
@@ -123,6 +123,40 @@ def analyze_sig_verify_res():
             for ind in sorted(list(b_res[c]),key=lambda x:b_res[c][x][1]):
                 print '#%s-sig-%d %d' % (c,ind,b_res[c][ind][0])
 
+def analyze_sig_verify_res():
+    A_siginfo=get_siginfo(sys.argv[1])
+    B_siginfo=get_siginfo(sys.argv[2])
+    siglist=[]
+    for sig in A_siginfo:
+        (signame,cnt,time)=A_siginfo[sig]
+        if sig not in B_siginfo:
+            if cnt >0:
+                siglist.append((signame,cnt,time))
+        else:
+            b_cnt=B_siginfo[sig][1]
+            if cnt>b_cnt and cnt >0:
+                siglist.append((signame,cnt,time))
+    siglist.sort(key=lambda x:x[2])
+    for (signame,cnt,time) in siglist:
+        print signame,cnt
+
+
+def get_siginfo(filepath):
+    siginfo={}
+    with open(filepath,'r') as f:
+        s_buf=f.readlines()
+    for line in s_buf:
+        if line[-1]=='\n':
+            line=line[:-1]
+        linelist=line.split(' ')
+        sig=linelist[0]
+        if linelist[1] =='None':
+            cnt=0
+        else:
+            cnt=int(linelist[1])
+        time=float(linelist[2])
+        siginfo[sig]=(sig,cnt,time)
+    return siginfo
 def _parse_cve_from_file(f):
     s = set()
     with open(f,'r') as fi:

@@ -2,11 +2,9 @@
 
 # We aim to extract semantic signatures of a list of patched/un-patched functions
 # Input:
-# sys.argv[1]: path/to/kernel-image
-# sys.argv[2]: path/to/kernel-symbol-table
-# sys.argv[3]: path/to/vmlinux
-# sys.argv[4]: path/to/target-function-list
-# sys.argv[5]: path/to/out_dir
+# sys.argv[1]: path/to/kernel dir(image, symboltable, debuginfo)
+# sys.argv[2]: path/to/sigs dir(target-function-list, we also store binary signatures there
+#optional: sys.argv[2]: cfgfast. change the mode of cfg generation
 # Output:
 # Pickle the extracted signatures in the output dir.
 
@@ -159,7 +157,7 @@ num_find = 10
 
 def do_ext_sig_markers(b,start,end,options=default_options,symbol_table=None):
     #Get the CFG at first, which is the base for multiple later tasks.
-    cfg = get_cfg_acc(b,start,end)
+    cfg = get_cfg_acc(b,start,end,cfgfast)
 
     #We need to locate the special 'PRFM' markings in the function CFG.
     locate_marks(b,cfg,start,end)
@@ -170,15 +168,15 @@ def do_ext_sig_markers(b,start,end,options=default_options,symbol_table=None):
         targets = targets.union(set(find[pos_mark]))
         sigs += init_signature_from_markers(b,get_func_cfg(cfg,start,proj=b,sym_tab=symbol_table),[pos_mark],find[pos_mark],options,sym_tab=symbol_table)
 
-    exe = Sym_Executor(options=options,dbg_out=True)
+    exe = Sym_Executor(options=options,dbg_out=False)
     smg = exe.try_sym_exec(proj=b,cfg=cfg,cfg_bounds=[start,end],targets=targets,start=start,new_tracer=True,new_recorder=True,sigs=sigs,sym_tab=symbol_table)
     return (exe.tracer.addr_collision,sigs)
 
 def do_ext_sig_insns(b,start,end,addrs,options=default_options,symbol_table=None):
     #Get the CFG at first, which is the base for multiple later tasks.
-    cfg = get_cfg_acc(b,start,end)
+    cfg = get_cfg_acc(b,start,end,cfgfast)
     func_cfg = get_func_cfg(cfg,start,proj=b,sym_tab=symbol_table,simplify=True)
-
+    
     sigs = init_signature_from_insns_aarch64(b,func_cfg,addrs,options,sym_tab=symbol_table)
     sigs = filter(is_sig_valid,sigs)
     if not sigs:
@@ -186,8 +184,7 @@ def do_ext_sig_insns(b,start,end,addrs,options=default_options,symbol_table=None
         return (False,None)
     #Get the execution targets from the sigs.
     targets = get_cfg_bound(sigs)
-
-    exe = Sym_Executor(options=options,dbg_out=True)
+    exe = Sym_Executor(options=options,dbg_out=False)
     smg = exe.try_sym_exec(proj=b,cfg=cfg,cfg_bounds=[start,end],targets=targets,start=start,new_tracer=True,new_recorder=True,sigs=sigs,sym_tab=symbol_table)
     return (exe.tracer.addr_collision,sigs)
 
@@ -213,17 +210,26 @@ def get_next_index(s):
         sig_index[s] = 0
         return 0
 
+cfgfast=False
 def ext_sig():
     global BASE
-    symbol_table = Sym_Table(sys.argv[2])
+    global cfgfast
+    if 'cfgfast' in sys.argv:
+        cfgfast = True
+    global kernelpath = sys.argv[1]
+    binarypath=kernelpath+"/boot"
+    symboltable_path=kernelpath+"/System.map"
+    symbol_table = Sym_Table(symboltable_path)
     BASE = symbol_table.probe_arm64_kernel_base()
     code_segments = symbol_table.get_code_segments(BASE)
-    #print [(hex(x),hex(y),hex(z)) for (x,y,z) in code_segments]
-    b = load_kernel_image(sys.argv[1],ARCH,BASE,segments=code_segments)
-    #Format of the function list file (argv[4]):
+    b = load_kernel_image(binarypath,ARCH,BASE,segments=code_segments)
+    #Format of the function list file (argv[2]/ext_list):
     #[cve] [func_name] [line numbers] [key:val] [key:val] ...
     perf_vec = []
-    with open(sys.argv[4],'r') as f:
+    extlistpath = sys.argv[2]+'/ext_list'
+    sigspath = sys.argv[2]+'/sigs'
+    os.mkdir(sigspath)
+    with open(extlistpath,'r') as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -231,21 +237,28 @@ def ext_sig():
             if line[0] == '#':
                 continue
             tokens = line.split(' ')
-            cve = tokens[0]
+            cve = tokens[0].split("_")[0]
             func_name = tokens[1]
             lnos = _parse_line_nos(tokens[2])
-            entry = symbol_table.lookup_func_name(func_name)
-            if entry is None:
-                print 'Cannot locate function in symbol table: ' + func_name
-                continue
-            (ty,func_addr,func_size) = entry
+            if tokens[-1].startswith('hosthostfunc'):
+                hosthostfunc=tokens[-1].split(":")[1]
+                hostfunc=hosthostfunc.split("--")[-1]
+            else:
+                hosthostfunc=None
+                hostfunc=func_name
+
             t0 = time.time()
-            addrs = get_addrs_from_lines_aarch64(sys.argv[3],func_name,func_addr,func_addr+func_size,lnos)
+            (addrs,entry) = get_addrs_from_lines_aarch64(kernelpath,func_name,lnos,hosthostfunc)
+            if len(addrs)==0:
+                print "no addrs!! kernel:",kernel,"func_name:",func_name,"lnos: ",lnos,"hosthostfunbc: ",hosthostfunc
+                continue
             aset = set()
             print '[Instructions Involved]'
             for ln in sorted(list(addrs)):
                 aset = aset.union(addrs[ln])
                 print '%d: %s' % (ln,str([hex(x) for x in sorted(list(addrs[ln]))]))
+            
+            (ty,func_addr,func_size) = entry
             options = copy.deepcopy(default_options)
             _parse_options(options,tokens[3:])
             _set_extra_default_options(options)
@@ -257,7 +270,9 @@ def ext_sig():
                 sig.graph['sig_name'] = sig_name
                 sig.graph['func_name'] = func_name
                 sig.graph['options'] = options
-                with open(sys.argv[5]+'/'+sig_name,'wb') as fs:
+                if hosthostfunc:
+                    sig.graph['hosthostfunc']=hosthostfunc
+                with open(sigspath+'/'+sig_name,'wb') as fs:
                     pickle.dump(sig,fs,-1)
                 perf_vec += [(sig_name,time.time()-t0)]
                 continue
@@ -278,6 +293,8 @@ def ext_sig():
             for i in range(len(sigs)):
                 #Record some global information in sig.
                 sigs[i].graph['func_name'] = func_name
+                if hosthostfunc:
+                    sigs[i].graph['hosthostfunc']=hosthostfunc
                 if len(sigs) > 1:
                     sig_name = cve+'-sig-%d-%d' % (sig_ind,i)
                 else:
@@ -285,55 +302,97 @@ def ext_sig():
                 sigs[i].graph['sig_name'] = sig_name
                 sigs[i].graph['options'] = options
                 simplify_signature(sigs[i])
-                analyze_func_args_aarch64(sys.argv[1],BASE,sigs[i],options)
+                analyze_func_args_aarch64(binarypath,BASE,sigs[i],options)
                 trim_signature(sigs[i],addrs,options)
                 show_signature(sigs[i])
-                with open(sys.argv[5]+'/'+sig_name,'wb') as fs:
+                print "sig_name: ",sig_name
+                with open(sigspath+'/'+sig_name,'wb') as fs:
                     pickle.dump(sigs[i],fs,-1)
-    with open('ext_res_%s_%.0f' % (sys.argv[1][sys.argv[1].rfind('/')+1:],time.time()),'w') as f:
-        for v in perf_vec:
-            l = '%s %.2f' % v
-            print l
-            f.write(l+'\n')
 
-ADDR2LINE = '/home/hang/ION/aarch64-linux-android-4.9/bin/aarch64-linux-android-addr2line'
+ADDR2LINE = '/home/zheng/fiberaarch64-linux-android-4.9/bin/aarch64-linux-android-addr2line'
+def get_lineinfo(l):
+    if l.startswith('0x'):
+        inline=False
+        tokens = l.split(':')
+        addr = int(tokens[0],16)
+        func = tokens[1].split(' ')[1]
+        lno = int(tokens[2].split(' ')[0])
+    elif l.startswith(' (inlined'):
+        inline=True
+        tokens = l.split(':')
+        lno = int(tokens[1].split(' ')[0])
+        func = tokens[0].split(' ')[3]
+        addr=None
+    else:
+        print 'Unrecognized ADDR2LINE output!!!'
+        return (None,None,None,None)
+    return (inline,addr,func,lno)
+
 #Use addr2line to find the instructions addrs related to the lines numbers in source code.
-def get_addrs_from_lines_aarch64(image,fname,st,ed,lines):
-    #First make the addr list file.
-    with open('tmp_i','w') as f:
-        for i in range(st,ed,4):
-            f.write('%x\n' % i)
-    #Use the addr2line to find out the line numbers.
-    with open('tmp_i','r') as fi:
-        with open('tmp_o','w') as fo:
-            subprocess.call([ADDR2LINE,'-afip','-e',image],stdin=fi,stdout=fo)
-    #Parse the outputs and form the addr set.
-    trim = lambda x:x[:-1] if x[-1] == '\n' else x
+def get_addrs_from_lines_aarch64(kernelpath,fname,lines,hosthostfunc=None):
+    hostfunc=fname
+    hosthostfunclist=None
+    if hosthostfunc:
+        hosthostfunclist=hosthostfunc.split('--')
+        hosthostfunc=hosthostfunclist[-1]
+        hostfunc=hosthostfunc
+    sym_tablepath=kernelpath+"/System.map"
+    symbol_table=Sym_Table(sym_tablepath)
+    entrylist = symbol_table.lookup_func_name(hostfunc,2)
+    if entrylist is None:
+        print 'Cannot locate function ' + hostfunc +" in symble table "+sym_tablepath
+        entry=symbol_table.lookup_func_name(hostfunc,1)
+        if entry is None:
+            return (set([]),None)
+        else:
+            entrylist=[entry]
+    for entry in entrylist:
+        f_buf=get_func_debuginfo(kernelpath,entry)
+        addrs=get_addrs_from_lines_aarch64_2(fname,lines,hosthostfunc,f_buf,hosthostfunclist)
+        if len(addrs) > 0:
+            print 'get suitable entry:'
+            print (entry[0],hex(entry[1]),hex(entry[2]))
+            break
+    #sometimes the funcname in symbol table is a little different
+    if len(addrs)==0:
+        print 'addrs ==0 try mode11'
+        entry=symbol_table.lookup_func_name(hostfunc,1)
+        f_buf=get_func_debuginfo(kernelpath,entry)
+        addrs=get_addrs_from_lines_aarch64_2(fname,lines,hosthostfunc,f_buf,hosthostfunclist)
+    return (addrs,entry)
+
+def get_addrs_from_lines_aarch64_2(fname,lines,hosthostfunc,f_buf,hosthostfunclist=None):
     addrs = {}
-    with open('tmp_o','r') as f:
-        for l in f:
-            l = trim(l)
-            if l.startswith('0x'):
-                #E.g.
-                #0xffffffc000a7aa9c: wcdcal_hwdep_ioctl_shared at /home/hang/pm/src-angler-20160801/sound/soc/codecs/wcdcal-hwdep.c:59
-                #0xffffffc000a7ab18: wcdcal_hwdep_ioctl_shared at /home/hang/pm/src-angler-20160801/sound/soc/codecs/wcdcal-hwdep.c:77 (discriminator 1)
-                tokens = l.split(':')
-                addr = int(tokens[0],16)
-                func = tokens[1].split(' ')[1]
-                lno = int(tokens[2].split(' ')[0])
-                #print '%x %s %d' % (addr,func,lno)
-            elif l.startswith(' (inlined'):
-                #E.g.
-                # (inlined by) wcdcal_hwdep_ioctl_shared at /home/hang/pm/src-angler-20160801/sound/soc/codecs/wcdcal-hwdep.c:66
-                tokens = l.split(':')
-                lno = int(tokens[1].split(' ')[0])
-                func = tokens[0].split(' ')[3]
-                #print '%x %s %d' % (addr,func,lno)
-            else:
-                print 'Unrecognized ADDR2LINE output!!!'
-                continue
+    if hosthostfunc:
+        for i in range(len(f_buf)):
+            line=trim(f_buf[i])
+            (inline,addr2,func,lno)=get_lineinfo(line)
+            if addr2:
+                addr=addr2
             if func == fname and lno in lines:
-                addrs.setdefault(lno,set()).add(addr)
+                j=1
+                for hostfunc in hosthostfunclist:
+                    newline=trim(f_buf[i+j])
+                    (newinline,newaddr,newfunc,newlno)=get_lineinfo(newline)
+                    if newfunc != hostfunc:
+                        break
+                    j +=1
+                #matched
+                else:
+                    addrs.setdefault(lno,set()).add(addr)
+        return addrs
+    #not hosthostfunc
+    for l in f_buf:
+        l = trim(l)
+        (inline,addr2,func,lno)=get_lineinfo(l)
+        if addr2:
+            addr=addr2
+            #E.g.
+            #0xffffffc000a7aa9c: wcdcal_hwdep_ioctl_shared at /home/hang/pm/src-angler-20160801/sound/soc/codecs/wcdcal-hwdep.c:59
+            #0xffffffc000a7ab18: wcdcal_hwdep_ioctl_shared at /home/hang/pm/src-angler-20160801/sound/soc/codecs/wcdcal-hwdep.c:77 (discriminator 1)
+            # (inlined by) wcdcal_hwdep_ioctl_shared at /home/hang/pm/src-angler-20160801/sound/soc/codecs/wcdcal-hwdep.c:66
+        if func == fname and lno in lines:
+            addrs.setdefault(lno,set()).add(addr)
     return addrs
 
 def _parse_line_nos(s):
