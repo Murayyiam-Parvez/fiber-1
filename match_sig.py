@@ -544,12 +544,11 @@ def get_matchlistpath(kernelpath):
 
 ARCH = 'aarch64'
 BASE = 0xffffffc000080000;
-#sys.argv[1] --> path/to/reference directory: contains  match-list (a file stores a list of pickled signature), reference patched kernel, reference not patched kernel
+#sys.argv[1] --> path/to/reference directory: contains  match-list (a file stores a list of pickled signature, will be generated automatically), reference patched kernel, reference not patched kernel
 #sys.argv[2] --> match mode
-#sys.argv[3] --> path/to/targetkernel (image and symbol table)
+#sys.argv[3] --> path/to/targetkernel (image and symbol table) (for mode 1)
 def match_sig(mode):
     sigspath = sys.argv[1]
-    target_kernelpath = sys.argv[3]
     #do the match with patched kernel and get cnt, time......
     #mode0 match with reference patched kernel
     if mode==0:
@@ -558,7 +557,7 @@ def match_sig(mode):
     #mode1 match with target kernel
     elif mode==1:
         matchlistpath=sigspath+"/match_res_m1"
-        kernelpath = target_kernelpath
+        kernelpath = sys.argv[3]
     #mode2: match with unpatched kernel
     elif mode==2:
         matchlistpath=sigspath+"/matchlist"
@@ -701,7 +700,8 @@ def match_sig3(entry,b,symbol_table,default_options,sig,imagepath,sig_name,func_
 
 #[sigpath] [mode] [target kernel path]
 if __name__ == '__main__':
-    global cfgfast=False
+    global cfgfas
+    cfgfas=False
     if 'cfgfast' in sys.argv:
         cfgfast=True
     t0=time.time()

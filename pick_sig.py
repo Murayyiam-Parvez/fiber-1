@@ -2,7 +2,7 @@
 #Given a patch file, this program aims to pick the best change-sites to use as signatures.
 #sys,argv[1]: path/to/patch_list
 #sys.argv[2]: path/to/kernel-source
-#sys.argv[3]: path/to/output_file
+#sys.argv[3]: path/to/output_dir(where we store extlist)
 #sys.argv[4:]: path to compiled reference kernel (including symbol table, debug info file)
 
 import sys
@@ -1119,9 +1119,9 @@ def do_pick_sig(patch_inf,pick_cnt=8):
 
 sym_tabs = []
 def pick_sig():
-    global sym_tabs
-    global sourcekernelpath = sys.argv[2]
-    global kernelpath = sys.argv[4]
+    global sym_tabs,sourcekernelpath,kernelpath
+    sourcekernelpath = sys.argv[2]
+    kernelpath = sys.argv[4]
     symboltable = kernelpath+'/System.map'
     sym_tabs.append(Sym_Table(symboltable,dbg_out=dbg_out))
     #Deal with patches in patch_list one by one.
@@ -1155,7 +1155,7 @@ def pick_sig():
                 fails += [patch_name]
                 print '****** No candidate generated for %s' % patch_name
     #Make the 'ext_list' file
-    with open(sys.argv[3],'w') as f:
+    with open(sys.argv[3]+'/extlist','w') as f:
         for c in exts:
             s = c['name'] + ' ' + c['func'] + ' '
             #s += '---%s|%d--- ' % (c['type'],c['func_range'][1]-c['func_range'][0])
@@ -1187,7 +1187,7 @@ def pick_sig():
     
     print 'Time: %.2f' % (time.time() - t0)
     if fails:
-        with open(sys.argv[3]+'_fail','w') as f:
+        with open(sys.argv[3]+'/extlist_fail','w') as f:
             for c in fails:
                 f.write(c+'\n')
 

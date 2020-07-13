@@ -3,7 +3,7 @@
 # We aim to extract semantic signatures of a list of patched/un-patched functions
 # Input:
 # sys.argv[1]: path/to/kernel dir(image, symboltable, debuginfo)
-# sys.argv[2]: path/to/sigs dir(target-function-list, we also store binary signatures there
+# sys.argv[2]: path/to/output dir in pick phase(extlist stored there, we also store binary signatures there
 #optional: sys.argv[2]: cfgfast. change the mode of cfg generation
 # Output:
 # Pickle the extracted signatures in the output dir.
