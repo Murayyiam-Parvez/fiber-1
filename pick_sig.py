@@ -1185,7 +1185,7 @@ def pick_sig():
     
     print 'Time: %.2f' % (time.time() - t0)
     if fails:
-        with open(sys.argv[3]+'./ext_list_fail','w') as f:
+        with open(sys.argv[3]+'/ext_list_fail','w') as f:
             for c in fails:
                 f.write(c+'\n')
 
