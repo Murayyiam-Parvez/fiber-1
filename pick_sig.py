@@ -2,7 +2,7 @@
 #Given a patch file, this program aims to pick the best change-sites to use as signatures.
 #sys,argv[1]: path/to/patch_list
 #sys.argv[2]: path/to/kernel-source
-#sys.argv[3]: path/to/output_dir(where we store extlist)
+#sys.argv[3]: path/to/output_dir
 #sys.argv[4:]: path to compiled reference kernel (including symbol table, debug info file)
 
 import sys
@@ -10,7 +10,6 @@ from sym_table import Sym_Table
 from src_parser import *
 import time
 import re
-import ext_sig
 import os
 import pickle
 from multiprocessing import Pool
@@ -24,8 +23,8 @@ def find_hosthostfunc(funcname):
     time0=time.time()
     global kernelpath
     #debug info file
-    tmp_o=kernelpath+"tmp_o"
-    symboltablepath=kernelpath+"System.map"
+    tmp_o=kernelpath+"/tmp_o"
+    symboltablepath=kernelpath+"/System.map"
     sym_table=Sym_Table(symboltablepath)
     #print "sym_table ",time.time()-time0
     found=False
@@ -138,7 +137,7 @@ def _get_tags_for_lines(l_range,f_inf):
 
 def func_exists_symbol(funcname):
     global kernelpath
-    symboltablepath=PATH+"System.map"
+    symboltablepath=kernelpath+"/System.map"
     sym_table=Sym_Table(symboltablepath)
     if sym_table.lookup_func_name(funcname):
         return True
@@ -151,10 +150,10 @@ def func_inline_vmlinux(funcname,hostfunc,kernelpath,lnos=None,hosthostfunc=None
     symboltable=kernelpath+"/System.map"
     sym_table=Sym_Table(symboltable)
     #function name in debug info maye be a little different from that in source code
-    global func_truefunc
+    global func_truefuncdic
     if 'CALL' in hostfunc:
-        hostfunc=func_truefunc[hostfunc]
-    if funcname in func_truefunc:
+        hostfunc=get_truefuncname(hostfunc)
+    if funcname in func_truefuncdic:
         funcname=func_truefunc[funcname]
     if not sym_table.lookup_func_name(funcname,2):
         print 'target function ',funcname,' not in symbol table ,we think it inlined '
@@ -168,7 +167,7 @@ def func_inline_vmlinux(funcname,hostfunc,kernelpath,lnos=None,hosthostfunc=None
         return True
     #simple entry
     if type(entry)==tuple:
-        return func_inline_vmlinux2(entry,funcname,hostfunc,kernelpath,lnos,hosthostfunc)
+        return func_inline_vmlinux2(entry,funcname,hostfunc,kernelpath,lnos)
     #multiple entry
     if type(entry)==list:
         entrylist=entry
@@ -367,7 +366,6 @@ def get_aft_patch_func(src,patch):
 #updated, fixed some errors
 def get_bfr_patch_func(src,patch):
     (st,ed) = patch['func_range']
-    #src_func = src[st-1:ed]
     src_func = src[st:ed+1] 
     if patch['type'] == 'aft':
         #The src is aft-patch version, we should add the 'deleted' lines and remove 'added' lines.
@@ -1104,8 +1102,8 @@ def do_pick_sig(patch_inf,pick_cnt=8):
     res_cand = rank_candidate(res_cand,patch_inf)
     for c in res_cand:
         c['arg_cnt'] = patch_inf[(c['file'],c['func'],c['func_range'][0])]['arg_cnt']
-        if c['func'] in func_truefunc:
-            c['func']=func_truefunc[c['func']]
+        if c['func'] in func_truefuncdic:
+            c['func']=func_truefuncdic[c['func']]
         if c['func'] in hosthostfuncdic:
             c['hosthostfunc']=hosthostfuncdic[c['func']]
     if not res_cand:
@@ -1155,7 +1153,7 @@ def pick_sig():
                 fails += [patch_name]
                 print '****** No candidate generated for %s' % patch_name
     #Make the 'ext_list' file
-    with open(sys.argv[3]+'/extlist','w') as f:
+    with open(sys.argv[3]+'/ext_list','w') as f:
         for c in exts:
             s = c['name'] + ' ' + c['func'] + ' '
             #s += '---%s|%d--- ' % (c['type'],c['func_range'][1]-c['func_range'][0])
@@ -1187,7 +1185,7 @@ def pick_sig():
     
     print 'Time: %.2f' % (time.time() - t0)
     if fails:
-        with open(sys.argv[3]+'/extlist_fail','w') as f:
+        with open(sys.argv[3]+'./ext_list_fail','w') as f:
             for c in fails:
                 f.write(c+'\n')
 

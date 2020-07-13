@@ -552,12 +552,13 @@ def match_sig(mode):
     #do the match with patched kernel and get cnt, time......
     #mode0 match with reference patched kernel
     if mode==0:
-        matchlistpath=get_matchlistpath(cve)
-        kernelpath = sigspath+'/patchkernel'
+        matchlistpath=get_matchlistpath(sigspath)
+        kernelpath = sigspath+'/refkernel'
     #mode1 match with target kernel
     elif mode==1:
         matchlistpath=sigspath+"/match_res_m1"
         kernelpath = sys.argv[3]
+        cve_results = {}
     #mode2: match with unpatched kernel
     elif mode==2:
         matchlistpath=sigspath+"/matchlist"
@@ -575,8 +576,13 @@ def match_sig(mode):
     code_segments = symbol_table.get_code_segments(BASE)
     b = load_kernel_image(imagepath,ARCH,BASE,segments=code_segments)
     sig_cntlist=[]
+    td = 0
+    prevcve= None
     with open(matchlistpath,'r') as f:
-        for line in f:
+        s_buf = f.readlines()
+        for i in range(len(s_buf)):
+            line = s_buf[i]
+            t0 = time.time()
             line = line.strip()
             print 'try with ',line
             if not line:
@@ -585,31 +591,37 @@ def match_sig(mode):
                 continue
             tks = line.split(' ')
             cve = tks[0][tks[0].rfind('/')+1:tks[0].rfind('-sig')]
+            if mode == 1:
+                if cve in cve_results:
+                    if cve_results[cve] == 'P':
+                        continue
+                if prevcve and cve != prevcve:
+                    td = 0
+                prevcve = cve
             #match with patched kernel
             result = match_sig2(tks,imagepath,symbol_table,b)
+            t1 = time.time()-t0
+            td += t1
             if not result:
+                if mode == 1:
+                    if cve not in cve_results:
+                        cve_results[cve]=(None,td)
                 continue
             (cnt,t1)=result
             sig_cntlist += [(line,cnt,t1)]
             if mode ==1:
                 targetcnt=int(line.split(' ')[-1])
                 if int(cnt) >= targetcnt:
-                    break
+                    cve_results[cve] = ('P',td)
+                else:
+                    cve_results[cve] = ('N',td)
 
     if mode==1:
         print '----------------RESULTS----------------'
-        result=None
-        for (line,cnt,Time) in sig_cntlist:
-            print line,str(cnt),Time
-            if result == 'P':
-                continue
-            if cnt != None:
-                target=int(line.split(' ')[-1])
-                if int(cnt) >= target:
-                    result='P'
-                else:
-                    result='N'
-        return result
+        outputmatchlist = target_kernelpath+'/matchresults'
+        with open(outputmatchlist,'a') as f:
+            for cve in cve_results:
+                f.write(cve+' '+str(cve_results[cve][0])+' '+str(cve_results[cve][1])+'\n')
     #mode==0,2
     else:
         sig_cntlist.sort(key=lambda tup: tup[2])
@@ -625,7 +637,7 @@ def match_sig(mode):
                 f.write(line+' '+str(cnt)+' '+str(Time)+'\n')
         #compare the results from unpatch/patch kernel, filter the useless signatures
         if mode == '2':
-            string='tools/res_analyze.py '+sigspath+'/match_res_m0A '+sigspath+'/match_res_m0B '+sigspath+"/match_res_m1"
+            string='tools/res_analyze.py '+sigspath+'/match_res_m0A '+sigspath+'/match_res_m0B >'+sigspath+"/match_res_m1"
             command(string)
 
 
@@ -700,17 +712,18 @@ def match_sig3(entry,b,symbol_table,default_options,sig,imagepath,sig_name,func_
 
 #[sigpath] [mode] [target kernel path]
 if __name__ == '__main__':
-    global cfgfas
-    cfgfas=False
+    global cfgfast
     if 'cfgfast' in sys.argv:
         cfgfast=True
+    else:
+        cfgfast=False
     t0=time.time()
     mode = sys.argv[2]
     if mode == 'all':
-        match_sig('0')
-        match_sig('2')
-        match_sig('1')
+        match_sig(0)
+        match_sig(2)
+        match_sig(1)
     else:
-        match_sig(mode)
+        match_sig(int(mode))
     Time=str(time.time()-t0).split('.')[0]
     print 'Time:',Time

@@ -231,7 +231,7 @@ def _locate_change_site(head,clines,blines,alines,s_buf,st_line=0):
                 if _cmp(alines,i):
                     #Got it.
                     if ty == 'aft':
-                        inf['add'] = {(i-len(plines+LINE_BASE),i-1+LINE_BASE):plines}
+                        inf['add'] = {(i-len(plines)+LINE_BASE,i-1+LINE_BASE):plines}
                     else:
                         inf['add'] = {(j+len(blines)+LINE_BASE,j+len(blines)+len(plines)-1+LINE_BASE):plines}
                     inf['type'] = ty

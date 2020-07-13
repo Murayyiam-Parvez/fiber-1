@@ -4,7 +4,7 @@
 # Input:
 # sys.argv[1]: path/to/kernel dir(image, symboltable, debuginfo)
 # sys.argv[2]: path/to/output dir in pick phase(extlist stored there, we also store binary signatures there
-#optional: sys.argv[2]: cfgfast. change the mode of cfg generation
+#optional: sys.argv[3]: cfgfast. change the mode of cfg generation
 # Output:
 # Pickle the extracted signatures in the output dir.
 
@@ -228,6 +228,8 @@ def ext_sig():
     extlistpath = sys.argv[2]+'/ext_list'
     sigspath = sys.argv[2]+'/sigs'
     os.mkdir(sigspath)
+    if not os.path.exists(sigspath):
+        os.mkdir(sigspath)
     with open(extlistpath,'r') as f:
         for line in f:
             line = line.strip()
@@ -249,7 +251,7 @@ def ext_sig():
             t0 = time.time()
             (addrs,entry) = get_addrs_from_lines_aarch64(kernelpath,func_name,lnos,hosthostfunc)
             if len(addrs)==0:
-                print "no addrs!! kernel:",kernel,"func_name:",func_name,"lnos: ",lnos,"hosthostfunbc: ",hosthostfunc
+                print "no addrs!! kernel:",kernelpath,"func_name:",func_name,"lnos: ",lnos,"hosthostfunbc: ",hosthostfunc
                 continue
             aset = set()
             print '[Instructions Involved]'

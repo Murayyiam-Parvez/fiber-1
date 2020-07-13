@@ -79,6 +79,8 @@ class Sym_Table(object):
             print 'mode ==1!!'
             func_list = self.lookup_func_name_complete(n)
         (addr,size) = (0,0)
+        if not func_list:
+            return None
         func_list=[element for element in func_list if element[0] in ('T','t')]
         if not func_list:
             if self.dbg_out:
