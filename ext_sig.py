@@ -212,11 +212,10 @@ def get_next_index(s):
 
 cfgfast=False
 def ext_sig():
-    global BASE
-    global cfgfast
+    global BASE,cfgfast,kernelpath
     if 'cfgfast' in sys.argv:
         cfgfast = True
-    global kernelpath = sys.argv[1]
+    kernelpath = sys.argv[1]
     binarypath=kernelpath+"/boot"
     symboltable_path=kernelpath+"/System.map"
     symbol_table = Sym_Table(symboltable_path)

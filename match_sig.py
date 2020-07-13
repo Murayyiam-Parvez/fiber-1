@@ -705,6 +705,7 @@ if __name__ == '__main__':
     if 'cfgfast' in sys.argv:
         cfgfast=True
     t0=time.time()
+    mode = sys.argv[2]
     if mode == 'all':
         match_sig('0')
         match_sig('2')
