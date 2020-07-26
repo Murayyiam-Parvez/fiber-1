@@ -553,16 +553,16 @@ def match_sig(mode):
     #mode0 match with reference patched kernel
     if mode==0:
         matchlistpath=get_matchlistpath(sigspath)
-        kernelpath = sigspath+'/refkernel'
+        kernelpath = sys.argv[3]
     #mode1 match with target kernel
     elif mode==1:
         matchlistpath=sigspath+"/match_res_m1"
-        kernelpath = sys.argv[3]
+        kernelpath = sys.argv[5]
         cve_results = {}
     #mode2: match with unpatched kernel
     elif mode==2:
         matchlistpath=sigspath+"/matchlist"
-        kernelpath = sigspath+'/nopatchkernel'
+        kernelpath = sys.argv[4]
     else:
         print 'invalid mode'
         return
@@ -636,8 +636,9 @@ def match_sig(mode):
                 print line+' '+str(cnt)+' '+str(Time)
                 f.write(line+' '+str(cnt)+' '+str(Time)+'\n')
         #compare the results from unpatch/patch kernel, filter the useless signatures
-        if mode == '2':
-            string='tools/res_analyze.py '+sigspath+'/match_res_m0A '+sigspath+'/match_res_m0B >'+sigspath+"/match_res_m1"
+        if mode == 2:
+            string='tools/res_analyze.py '+sigspath+'/match_res_m0A '+sigspath+'/match_res_m0B > '+sigspath+"/match_res_m1"
+            print string
             command(string)
 
 
@@ -726,4 +727,4 @@ if __name__ == '__main__':
     else:
         match_sig(int(mode))
     Time=str(time.time()-t0).split('.')[0]
-    print 'Time:',Time
+    print 'Time(s):',Time
