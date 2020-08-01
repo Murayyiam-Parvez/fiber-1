@@ -154,7 +154,7 @@ def func_inline_vmlinux(funcname,hostfunc,kernelpath,lnos=None,hosthostfunc=None
     if 'CALL' in hostfunc:
         hostfunc=get_truefuncname(hostfunc)
     if funcname in func_truefuncdic:
-        funcname=func_truefunc[funcname]
+        funcname=func_truefuncdic[funcname]
     if not sym_table.lookup_func_name(funcname,2):
         print 'target function ',funcname,' not in symbol table ,we think it inlined '
         return True
