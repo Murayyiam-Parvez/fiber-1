@@ -18,6 +18,14 @@ from multiprocessing import Pool
 #(1) Patches with '#if' '#else', e.g. CVE-2015-8839
 
 ADDR2LINE = '/home/zheng/fiberaarch64-linux-android-4.9/bin/aarch64-linux-android-addr2line'
+#it's possible that host function is not compiled in binary, in that case, we cannot generate the signatures.
+def test_func_inbinary(funcname):
+    global kernelpath
+    tmp_o=kernelpath+"/tmp_o"
+    with open(tmp_o,'r') as f:
+        s_buf = f.readlines()
+    return any(funcname in line for line in s_buf)
+
 #if host function is inlined in target, we try to find the hostfunction of hostfunction instead. what hosthostfunction is most suitable?
 def find_hosthostfunc(funcname):
     time0=time.time()
@@ -1073,16 +1081,24 @@ def do_pick_sig(patch_inf,pick_cnt=8):
         print '****** Pure deletion patch or pre-patched.'
         return []
     #We must ensure that the cand functions do exist in src kernel binary, since the extraction is based on the binary.
+    cands2=[]
     for cand in cands:
         funcname=cand['func']
         if 'CALL' in funcname:
             funcname=get_truefuncname(cand,kernelpath)
         if not func_exists_symbol(funcname):
+            if not test_func_inbinary(funcname):
+                print funcname,'is not compiled in the binary'
+                continue
             hosthostfunc=find_hosthostfunc(funcname)
             if not hosthostfunc:
                 continue
             cand['hosthostfunc']=hosthostfunc
             hosthostfuncdic[funcname]=hosthostfunc
+            cands2 += [cand]
+        else:
+            cands2 += [cand]
+    cands = cands2
     if not cands:
         print '****** No function name in the symbol table.'
         return []
