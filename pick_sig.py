@@ -1091,7 +1091,6 @@ def do_pick_sig(patch_inf,pick_cnt=8):
     func_inf = parse_funcs_in_patch(patch_inf)
     #Do a filtering since some lines (e.g. variable declaration) cannot be used in signature extraction.
     cands = filter(lambda x:not _is_decl_cand(x),cands)
-    dbg_out = True
     if dbg_out:
         print '****Candidate lines after filtering out variable declarations****'
         for c in cands:
@@ -1138,7 +1137,6 @@ def pick_sig():
                 continue
             print '------------' + patch_name + '----------------'
             patch_inf = parse_patch(patch_name,sys.argv[2])
-            print 'patch_inf\n',patch_inf
             if not patch_inf:
                 fails += [patch_name]
                 print '****** Fail to match the patch.'
