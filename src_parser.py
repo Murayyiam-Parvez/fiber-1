@@ -211,11 +211,11 @@ def _locate_change_site(head,clines,blines,alines,s_buf,st_line=0):
                 if _cmp(alines,i):
                     #Call it a day.
                     if ty == 'aft':
-                        inf['add'] = {(i-len(plines)+LINE_BASE,i-1+LINE_BASE):plines}
-                        inf['del'] = {(j+len(blines)+LINE_BASE,j+len(blines)+len(nlines)-1+LINE_BASE):nlines}
+                        inf['add'] = {(i-len(plines),i-1):plines}
+                        inf['del'] = {(j+len(blines),j+len(blines)+len(nlines)-1):nlines}
                     else:
-                        inf['del'] = {(i-len(nlines)+LINE_BASE,i-1+LINE_BASE):nlines}
-                        inf['add'] = {(j+len(blines)+LINE_BASE,j+len(blines)+len(plines)-1+LINE_BASE):plines}
+                        inf['del'] = {(i-len(nlines),i-1):nlines}
+                        inf['add'] = {(j+len(blines),j+len(blines)+len(plines)-1):plines}
                     inf['type'] = ty
                     return (inf,i)
                 else:
@@ -231,9 +231,9 @@ def _locate_change_site(head,clines,blines,alines,s_buf,st_line=0):
                 if _cmp(alines,i):
                     #Got it.
                     if ty == 'aft':
-                        inf['add'] = {(i-len(plines)+LINE_BASE,i-1+LINE_BASE):plines}
+                        inf['add'] = {(i-len(plines),i-1):plines}
                     else:
-                        inf['add'] = {(j+len(blines)+LINE_BASE,j+len(blines)+len(plines)-1+LINE_BASE):plines}
+                        inf['add'] = {(j+len(blines),j+len(blines)+len(plines)-1):plines}
                     inf['type'] = ty
                     return (inf,i)
                 else:
@@ -248,9 +248,9 @@ def _locate_change_site(head,clines,blines,alines,s_buf,st_line=0):
                     ty = 'aft'
                 if _cmp(alines,i):
                     if ty == 'aft':
-                        inf['del'] = {(j+len(blines)+LINE_BASE,j+len(blines)+len(nlines)-1+LINE_BASE):nlines}
+                        inf['del'] = {(j+len(blines),j+len(blines)+len(nlines)-1):nlines}
                     else:
-                        inf['del'] = {(i-len(nlines)+LINE_BASE,i-1+LINE_BASE):nlines}
+                        inf['del'] = {(i-len(nlines),i-1):nlines}
                     inf['type'] = ty
                     return (inf,i)
                 else:
@@ -312,20 +312,20 @@ def build_func_map(s_buf):
                     if func_head:
                         (func,arg_cnt) = func_head
                         #update: head contains multiple lines
-                        if func_head[0]+'(' not in s_buf[prev_pos[0]-LINE_BASE]:
+                        if func_head[0]+'(' not in s_buf[prev_pos[0]-1]:
                             startline=prev_pos[0]-1
                             funcname=func_head[0]
                             while True:
                                 if funcname+'(' in s_buf[startline-1]:
                                     break
                                 startline -=1
-                            cur_func_inf[(startline,i+LINE_BASE)] = func_head
-                            cur_func_inf_r[(func,startline)] = ((startline,i+LINE_BASE),arg_cnt)
+                            cur_func_inf[(startline,i)] = func_head
+                            cur_func_inf_r[(func,startline)] = ((startline,i),arg_cnt)
                         else:
-                            cur_func_inf[(prev_pos[0],i+LINE_BASE)] = func_head
+                            cur_func_inf[(prev_pos[0],i)] = func_head
                             #NOTE: Sometimes one file can have multiple functions with same name, due to #if...#else.
                             #So to mark a function we need both name and its location.
-                            cur_func_inf_r[(func,prev_pos[0])] = ((prev_pos[0],i+LINE_BASE),arg_cnt)
+                            cur_func_inf_r[(func,prev_pos[0])] = ((prev_pos[0],i),arg_cnt)
                 elif cnt < 0:
                     print '!!! Syntax error: ' + s_buf[i]
                     print 'prev_pos: %d:%d' % adj_lno_tuple(prev_pos)
