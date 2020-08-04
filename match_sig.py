@@ -618,9 +618,10 @@ def match_sig(mode):
 
     if mode==1:
         print '----------------RESULTS----------------'
-        outputmatchlist = target_kernelpath+'/matchresults'
+        outputmatchlist = kernelpath+'/matchresults'
         with open(outputmatchlist,'a') as f:
             for cve in cve_results:
+                print cve+' '+str(cve_results[cve][0])+' '+str(cve_results[cve][1])
                 f.write(cve+' '+str(cve_results[cve][0])+' '+str(cve_results[cve][1])+'\n')
     #mode==0,2
     else:
