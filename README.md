@@ -38,8 +38,8 @@ At first we need to install virtualenvwrapper for python, please follow the [off
 Before continuing, plz make sure that virtualenvwrapper is correctly installed and you can execute its commands:  
 `~$ workon`  
 NOTE, **plz don't use *sudo* from here on unless explicitly prompted**.  
-`~$ git clone https://github.com/fiberx/fiber.git;git checkout E-Fiber`  
-`~$ cd fiber`  
+`~$ git clone https://github.com/zhangzhenghsy/fiber-1.git`  
+`~$ cd fiber;git checkout E-Fiber`  
 Setup the angr development environment specifically crafted for fiber:  
 `~/fiber$ ./setup_angr_env.sh [dir_name] [venv_name]`
 
