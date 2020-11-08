@@ -227,7 +227,6 @@ def ext_sig():
     perf_vec = []
     extlistpath = sys.argv[2]+'/ext_list'
     sigspath = sys.argv[2]+'/sigs'
-    os.mkdir(sigspath)
     if not os.path.exists(sigspath):
         os.mkdir(sigspath)
     with open(extlistpath,'r') as f:
