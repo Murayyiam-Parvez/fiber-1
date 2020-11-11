@@ -556,6 +556,9 @@ def match_sig(mode):
         kernelpath = sys.argv[3]
     #mode1 match with target kernel
     elif mode==1:
+        #compare the results from unpatch/patch kernel, filter the useless signatures
+        string='tools/res_analyze.py '+sigspath+'/match_res_m0A '+sigspath+'/match_res_m0B > '+sigspath+"/match_res_m1"
+        command(string)
         matchlistpath=sigspath+"/match_res_m1"
         kernelpath = sys.argv[5]
         cve_results = {}
@@ -636,11 +639,6 @@ def match_sig(mode):
                 Time=format(Time,'.2f')
                 print line+' '+str(cnt)+' '+str(Time)
                 f.write(line+' '+str(cnt)+' '+str(Time)+'\n')
-        #compare the results from unpatch/patch kernel, filter the useless signatures
-        if mode == 2:
-            string='tools/res_analyze.py '+sigspath+'/match_res_m0A '+sigspath+'/match_res_m0B > '+sigspath+"/match_res_m1"
-            print string
-            command(string)
 
 
 def match_sig2(tks,imagepath,symbol_table,b):
