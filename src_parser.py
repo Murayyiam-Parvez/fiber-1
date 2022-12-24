@@ -37,6 +37,8 @@ def parse_patch(patch,kernel):
     with open(patch,'r') as p:
         p_buf = p.readlines()
     _trim_lines(p_buf)
+    #print "p_buf:"
+    #print p_buf
     diff_index = [i for i in range(len(p_buf)) if p_buf[i].startswith('diff')] + [len(p_buf)]
     for i in range(len(diff_index)-1):
         inf.update(_parse_patch_diff(p_buf,diff_index[i],diff_index[i+1],kernel))
@@ -192,6 +194,7 @@ def _locate_change_site(head,clines,blines,alines,s_buf,st_line=0):
     plines = map(lambda x:x[1:],plines)
     nlines = filter(lambda x:x.startswith('-'),clines)
     nlines = map(lambda x:x[1:],nlines)
+
     inf = {}
     while i < len(s_buf):
         j = i
@@ -231,7 +234,9 @@ def _locate_change_site(head,clines,blines,alines,s_buf,st_line=0):
                 if _cmp(alines,i):
                     #Got it.
                     if ty == 'aft':
-                        inf['add'] = {(i-len(plines+LINE_BASE),i-1+LINE_BASE):plines}
+                        #print i-len(plines+LINE_BASE)
+                        #print i-1+LINE_BASE
+                        inf['add'] = {(i-len(plines)+LINE_BASE,i-1+LINE_BASE):plines}
                     else:
                         inf['add'] = {(j+len(blines)+LINE_BASE,j+len(blines)+len(plines)-1+LINE_BASE):plines}
                     inf['type'] = ty
