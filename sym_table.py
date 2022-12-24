@@ -15,6 +15,7 @@ class Sym_Table(object):
 
     #Load symbol table(s) from a file.
     def _load_symbol_table(self,f):
+        print f
         with open(f,'r') as symf:
             s_buf=symf.readlines()
             for i in range(len(s_buf)):
@@ -68,32 +69,29 @@ class Sym_Table(object):
             if name.startswith(n):
                 func_list+= self._r_sym_table[name]
         return func_list 
-
+    
     #This is specifically designed to pick one tuple for a function name.
     def lookup_func_name(self,n,mode=0):
-        #specific cases:
-        if 'SyS' in n:
-            n=n.lower()
         func_list = self.lookup(n)
-        if mode==1:
-            print 'mode ==1!!'
-            func_list = self.lookup_func_name_complete(n)
         (addr,size) = (0,0)
-        func_list=[element for element in func_list if element[0] in ('T','t')]
         if not func_list:
             if self.dbg_out:
-                print 'Cannot find function name in symbol table: ' , n
+                print 'Cannot find function name in symbol table: ' + n
             return None
-        #we prefer function with larger size
-        func_list.sort(key=lambda x: x[2],reverse=True)
-        if self.dbg_out:
-            for (ty,addr,size) in func_list:
-                print '[Func] %s: %x - %x' % (n,addr,addr + size)
-        if mode==2:
-            return func_list
         else:
-            (ty,addr,size)=func_list[0] 
-            return (ty,addr,size)
+            #print func_list
+            #Pick the first entry which has type 'T/t/'
+            for (ty,addr,size) in func_list:
+                if ty in ('T','t'):
+                    break
+            if (addr,size) == (0,0):
+                if self.dbg_out:
+                    print 'No symbol entry picked.'
+                return None
+            else:
+                if self.dbg_out:
+                    print '[Func] %s: %x - %x' % (n,addr,addr + size)
+                return (ty,addr,size)
 
     def probe_arm64_kernel_base(self):
         for (addr,ty,name) in self.raw_syms:
