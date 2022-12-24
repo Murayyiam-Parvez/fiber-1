@@ -216,9 +216,9 @@ def ext_sig():
     global cfgfast
     if 'cfgfast' in sys.argv:
         cfgfast = True
-    global kernelpath = sys.argv[1]
-    binarypath=kernelpath+"/boot"
-    symboltable_path=kernelpath+"/System.map"
+    kernelpath = sys.argv[1]
+    binarypath=kernelpath+"Image"
+    symboltable_path=kernelpath+"System.map"
     symbol_table = Sym_Table(symboltable_path)
     BASE = symbol_table.probe_arm64_kernel_base()
     code_segments = symbol_table.get_code_segments(BASE)
@@ -226,8 +226,9 @@ def ext_sig():
     #Format of the function list file (argv[2]/ext_list):
     #[cve] [func_name] [line numbers] [key:val] [key:val] ...
     perf_vec = []
-    extlistpath = sys.argv[2]+'/ext_list'
-    sigspath = sys.argv[2]+'/sigs'
+    extlistpath = sys.argv[5]
+    sigspath = sys.argv[1]+'output/'
+
     os.mkdir(sigspath)
     with open(extlistpath,'r') as f:
         for line in f:
@@ -254,6 +255,7 @@ def ext_sig():
                 continue
             aset = set()
             print '[Instructions Involved]'
+            print list(addrs)
             for ln in sorted(list(addrs)):
                 aset = aset.union(addrs[ln])
                 print '%d: %s' % (ln,str([hex(x) for x in sorted(list(addrs[ln]))]))
@@ -331,14 +333,17 @@ def get_lineinfo(l):
 #Use addr2line to find the instructions addrs related to the lines numbers in source code.
 def get_addrs_from_lines_aarch64(kernelpath,fname,lines,hosthostfunc=None):
     hostfunc=fname
+    print fname
     hosthostfunclist=None
+    entrylist = []
+    addrs = {}
     if hosthostfunc:
         hosthostfunclist=hosthostfunc.split('--')
         hosthostfunc=hosthostfunclist[-1]
         hostfunc=hosthostfunc
     sym_tablepath=kernelpath+"/System.map"
     symbol_table=Sym_Table(sym_tablepath)
-    entrylist = symbol_table.lookup_func_name(hostfunc,2)
+    entrylist.append(symbol_table.lookup_func_name(hostfunc,2))
     if entrylist is None:
         print 'Cannot locate function ' + hostfunc +" in symble table "+sym_tablepath
         entry=symbol_table.lookup_func_name(hostfunc,1)
@@ -346,9 +351,18 @@ def get_addrs_from_lines_aarch64(kernelpath,fname,lines,hosthostfunc=None):
             return (set([]),None)
         else:
             entrylist=[entry]
+    #print entrylist
     for entry in entrylist:
-        f_buf=get_func_debuginfo(kernelpath,entry)
-        addrs=get_addrs_from_lines_aarch64_2(fname,lines,hosthostfunc,f_buf,hosthostfunclist)
+        print "ENTRY"
+        print entry
+
+        (inline,addr2,func,lno)=get_lineinfo(line)
+        if func == fname and lno in lines:
+                addrs.setdefault(lno,set()).add(entry[1])
+        #addrs.append(entry[1])
+        #f_buf=get_func_debuginfo(kernelpath,entry)
+        #addrs=get_addrs_from_lines_aarch64_2(fname,lines,hosthostfunc,f_buf,hosthostfunclist)
+        print len(addrs)
         if len(addrs) > 0:
             print 'get suitable entry:'
             print (entry[0],hex(entry[1]),hex(entry[2]))
