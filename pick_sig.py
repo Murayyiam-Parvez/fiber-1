@@ -18,11 +18,13 @@ from multiprocessing import Pool
 #TODO List:
 #(1) Patches with '#if' '#else', e.g. CVE-2015-8839
 
+kernelpath = ""
+func_truefunc = ""
 ADDR2LINE = '/home/zheng/fiberaarch64-linux-android-4.9/bin/aarch64-linux-android-addr2line'
 #if host function is inlined in target, we try to find the hostfunction of hostfunction instead. what hosthostfunction is most suitable?
 def find_hosthostfunc(funcname):
     time0=time.time()
-    global kernelpath
+    #kernelpath
     #debug info file
     tmp_o=kernelpath+"tmp_o"
     symboltablepath=kernelpath+"System.map"
@@ -137,8 +139,9 @@ def _get_tags_for_lines(l_range,f_inf):
     return tags
 
 def func_exists_symbol(funcname):
-    global kernelpath
-    symboltablepath=PATH+"System.map"
+    #global kernelpath
+    #print kernelpath
+    symboltablepath=kernelpath+"System.map"
     sym_table=Sym_Table(symboltablepath)
     if sym_table.lookup_func_name(funcname):
         return True
@@ -151,11 +154,15 @@ def func_inline_vmlinux(funcname,hostfunc,kernelpath,lnos=None,hosthostfunc=None
     symboltable=kernelpath+"/System.map"
     sym_table=Sym_Table(symboltable)
     #function name in debug info maye be a little different from that in source code
+    print "host"
+    print hostfunc
     global func_truefunc
     if 'CALL' in hostfunc:
         hostfunc=func_truefunc[hostfunc]
     if funcname in func_truefunc:
         funcname=func_truefunc[funcname]
+    print "function name"
+    print funcname
     if not sym_table.lookup_func_name(funcname,2):
         print 'target function ',funcname,' not in symbol table ,we think it inlined '
         return True
@@ -460,7 +467,7 @@ def trim_line_candidates(cand,patch,cnt=20):
         hosthostfunc=cand['hosthostfunc']
     else:
         hosthostfunc=None
-    global kernelpath
+    #global kernelpath
     fi = func_inf[(c_file,c_func,cand['func_range'][0])]
     tags = _get_tags_for_lines(cand['line'],fi)
     res_cand = []
@@ -831,7 +838,7 @@ def add_context_no_guarantee(src,lines,patch,f_inf,c_func,hosthostfunc=None):
             for ele in rang:
                 lnos.add(ele+1)
 
-            global kernelpath
+            #global kernelpath
             if not func_inline_vmlinux(fi['name'],hostfunc,kernelpath,lnos,hosthostfunc):
                 yield (c_func,False)
             else:
@@ -1068,7 +1075,7 @@ def get_truefuncname(cand):
 func_inf = {}
 def do_pick_sig(patch_inf,pick_cnt=8):
     hosthostfuncdic={}
-    global kernelpath
+    #global kernelpath
     #It's time to decide the source code lines that we can mark to extract signatures.
     cands = generate_line_candidates(patch_inf)
     if not cands:
@@ -1099,6 +1106,14 @@ def do_pick_sig(patch_inf,pick_cnt=8):
             print '%s %s %s' % (c['file'],c['func'],c['line'])
     #For each candidate change site, we need to do some adjustments, if it's not unique, contexts need to be added,
     #if it contains multiple lines, it may need to be trimmed.
+    print "cands:"
+    print cands
+    
+    print "patch inf"
+    print patch_inf
+    
+    print "cnt"
+    print pick_cnt
     res_cand = refine_line_candidates(cands,patch_inf,pick_cnt)
     #Pick up the most promising candidates.
     res_cand = rank_candidate(res_cand,patch_inf)
@@ -1120,9 +1135,10 @@ def do_pick_sig(patch_inf,pick_cnt=8):
 sym_tabs = []
 def pick_sig():
     global sym_tabs
-    global sourcekernelpath = sys.argv[2]
-    global kernelpath = sys.argv[4]
-    symboltable = kernelpath+'/System.map'
+    sourcekernelpath = sys.argv[2]
+    global kernelpath
+    kernelpath = sys.argv[4]
+    symboltable = kernelpath+"System.map"
     sym_tabs.append(Sym_Table(symboltable,dbg_out=dbg_out))
     #Deal with patches in patch_list one by one.
     exts = []
